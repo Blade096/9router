@@ -23,27 +23,38 @@ export default function ModelSelectModal({
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [combos, setCombos] = useState([]);
-  const [customModelInputs, setCustomModelInputs] = useState({});
   const [providerNodes, setProviderNodes] = useState([]);
 
-  // Fetch combos when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      fetch("/api/combos")
-        .then(res => res.json())
-        .then(data => setCombos(data.combos || []))
-        .catch(() => setCombos([]));
+  const fetchCombos = async () => {
+    try {
+      const res = await fetch("/api/combos");
+      if (!res.ok) throw new Error(`Failed to fetch combos: ${res.status}`);
+      const data = await res.json();
+      setCombos(data.combos || []);
+    } catch (error) {
+      console.error("Error fetching combos:", error);
+      setCombos([]);
     }
+  };
+
+  useEffect(() => {
+    if (isOpen) fetchCombos();
   }, [isOpen]);
 
-  // Fetch provider nodes when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      fetch("/api/provider-nodes")
-        .then(res => res.json())
-        .then(data => setProviderNodes(data.nodes || []))
-        .catch(() => setProviderNodes([]));
+  const fetchProviderNodes = async () => {
+    try {
+      const res = await fetch("/api/provider-nodes");
+      if (!res.ok) throw new Error(`Failed to fetch provider nodes: ${res.status}`);
+      const data = await res.json();
+      setProviderNodes(data.nodes || []);
+    } catch (error) {
+      console.error("Error fetching provider nodes:", error);
+      setProviderNodes([]);
     }
+  };
+
+  useEffect(() => {
+    if (isOpen) fetchProviderNodes();
   }, [isOpen]);
 
   const allProviders = useMemo(() => ({ ...OAUTH_PROVIDERS, ...APIKEY_PROVIDERS }), []);

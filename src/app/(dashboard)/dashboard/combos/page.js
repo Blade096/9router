@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
@@ -18,7 +18,7 @@ export default function CombosPage() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchData = async () => {
     try {
@@ -238,25 +238,30 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders }) {
   const [modelAliases, setModelAliases] = useState({});
   const [providerNodes, setProviderNodes] = useState([]);
 
-  // Fetch model aliases and provider nodes when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      const fetchData = async () => {
-        try {
-          const [aliasesRes, nodesRes] = await Promise.all([
-            fetch("/api/models/alias"),
-            fetch("/api/provider-nodes"),
-          ]);
-          const aliasesData = await aliasesRes.json();
-          const nodesData = await nodesRes.json();
-          if (aliasesRes.ok) setModelAliases(aliasesData.aliases || {});
-          if (nodesRes.ok) setProviderNodes(nodesData.nodes || []);
-        } catch (error) {
-          console.log("Error fetching data:", error);
-        }
-      };
-      fetchData();
+  const fetchModalData = async () => {
+    try {
+      const [aliasesRes, nodesRes] = await Promise.all([
+        fetch("/api/models/alias"),
+        fetch("/api/provider-nodes"),
+      ]);
+
+      if (!aliasesRes.ok || !nodesRes.ok) {
+        throw new Error(`Failed to fetch data: aliases=${aliasesRes.status}, nodes=${nodesRes.status}`);
+      }
+
+      const [aliasesData, nodesData] = await Promise.all([
+        aliasesRes.json(),
+        nodesRes.json(),
+      ]);
+      setModelAliases(aliasesData.aliases || {});
+      setProviderNodes(nodesData.nodes || []);
+    } catch (error) {
+      console.error("Error fetching modal data:", error);
     }
+  };
+
+  useEffect(() => {
+    if (isOpen) fetchModalData();
   }, [isOpen]);
 
   const validateName = (value) => {
@@ -290,7 +295,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders }) {
   };
 
   // Format model display name with readable provider name
-  const formatModelDisplay = (modelValue) => {
+  const formatModelDisplay = useCallback((modelValue) => {
     const parts = modelValue.split('/');
     if (parts.length !== 2) return modelValue;
     
@@ -302,7 +307,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders }) {
     }
     
     return modelValue;
-  };
+  }, [providerNodes]);
 
   const handleMoveUp = (index) => {
     if (index === 0) return;
