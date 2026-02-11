@@ -1,3 +1,4 @@
+import "@/lib/initProxy"; // Initialize global proxy for undici/fetch
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/shared/components/ThemeProvider";
