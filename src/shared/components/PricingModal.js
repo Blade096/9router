@@ -9,31 +9,31 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (isOpen) {
-      loadPricing();
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
 
-  const loadPricing = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch("/api/pricing");
-      if (response.ok) {
-        const data = await response.json();
-        setPricingData(data);
-      } else {
-        // Fallback to defaults
+    const loadPricing = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch("/api/pricing");
+        if (response.ok) {
+          const data = await response.json();
+          setPricingData(data);
+        } else {
+          // Fallback to defaults
+          const defaults = getDefaultPricing();
+          setPricingData(defaults);
+        }
+      } catch (error) {
+        console.error("Failed to load pricing:", error);
         const defaults = getDefaultPricing();
         setPricingData(defaults);
+      } finally {
+        setLoading(false);
       }
-    } catch (error) {
-      console.error("Failed to load pricing:", error);
-      const defaults = getDefaultPricing();
-      setPricingData(defaults);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+
+    loadPricing();
+  }, [isOpen]);
 
   const handlePricingChange = (provider, model, field, value) => {
     const numValue = parseFloat(value);
@@ -94,12 +94,13 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
   const pricingFields = ["input", "output", "cached", "reasoning", "cache_creation"];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-bg-base border border-border rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-surface border border-border rounded-lg shadow-elevated max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="p-4 border-b border-border flex items-center justify-between">
           <h2 className="text-xl font-semibold">Pricing Configuration</h2>
           <button
+            type="button"
             onClick={onClose}
             className="text-text-muted hover:text-text text-2xl leading-none"
           >
@@ -114,7 +115,7 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
           ) : (
             <div className="space-y-6">
               {/* Instructions */}
-              <div className="bg-bg-subtle border border-border rounded-lg p-3 text-sm">
+              <div className="bg-bg-alt border border-border rounded-lg p-3 text-sm">
                 <p className="font-medium mb-1">Pricing Rates Format</p>
                 <p className="text-text-muted">
                   All rates are in <strong>dollars per million tokens</strong> ($/1M tokens).
@@ -127,12 +128,12 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
                 const models = Object.keys(pricingData[provider]).sort();
                 return (
                   <div key={provider} className="border border-border rounded-lg overflow-hidden">
-                    <div className="bg-bg-subtle px-4 py-2 font-semibold text-sm">
+                    <div className="bg-bg-alt px-4 py-2 font-semibold text-sm">
                       {provider.toUpperCase()}
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
-                        <thead className="bg-bg-hover text-text-muted uppercase text-xs">
+                        <thead className="bg-bg-alt text-text-muted uppercase text-xs">
                           <tr>
                             <th className="px-3 py-2 text-left">Model</th>
                             <th className="px-3 py-2 text-right">Input</th>
@@ -144,17 +145,17 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
                         </thead>
                         <tbody className="divide-y divide-border">
                           {models.map(model => (
-                            <tr key={model} className="hover:bg-bg-subtle/50">
+                            <tr key={model} className="hover:bg-bg-alt/50">
                               <td className="px-3 py-2 font-medium">{model}</td>
-                              {pricingFields.map(field => (
-                                <td key={field} className="px-3 py-2">
+{pricingFields.map(field => (
+                                <td key={field} className="px-3 py-2 text-right">
                                   <input
                                     type="number"
                                     step="0.01"
                                     min="0"
                                     value={pricingData[provider][model][field] || 0}
                                     onChange={(e) => handlePricingChange(provider, model, field, e.target.value)}
-                                    className="w-20 px-2 py-1 text-right bg-bg-base border border-border rounded focus:outline-none focus:border-primary"
+                                    className="w-20 px-2 py-1 text-right bg-bg border border-border rounded focus:outline-none focus:border-primary"
                                   />
                                 </td>
                               ))}
@@ -179,6 +180,7 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
         {/* Footer */}
         <div className="p-4 border-t border-border flex items-center justify-between gap-2">
           <button
+            type="button"
             onClick={handleReset}
             className="px-4 py-2 text-sm text-red-500 hover:bg-red-500/10 rounded border border-red-500/20 transition-colors"
             disabled={saving}
@@ -187,6 +189,7 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
           </button>
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={onClose}
               className="px-4 py-2 text-sm text-text-muted hover:text-text border border-border rounded transition-colors"
               disabled={saving}
@@ -194,6 +197,7 @@ export default function PricingModal({ isOpen, onClose, onSave }) {
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleSave}
               className="px-4 py-2 text-sm bg-primary text-white rounded hover:bg-primary/90 transition-colors disabled:opacity-50"
               disabled={saving}
