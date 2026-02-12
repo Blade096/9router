@@ -2,7 +2,7 @@
  * Token Usage Tracking - Extract, normalize, estimate and log token usage
  */
 
-import { saveRequestUsage, appendRequestLog } from "@/lib/usageDb.js";
+import { saveRequestUsage } from "@/lib/usageDb.js";
 import { FORMATS } from "../translator/formats.js";
 
 // ANSI color codes
@@ -319,5 +319,4 @@ export function logUsage(provider, usage, model = null, connectionId = null, api
     reasoning_tokens: reasoning || 0
   };
   saveRequestUsage({ model, provider, connectionId, tokens, timestamp: new Date().toISOString(), status: "200 OK", apiKey: apiKey || undefined }).catch(() => { });
-  appendRequestLog({ model, provider, connectionId, tokens, status: "200 OK" }).catch(() => { });
 }

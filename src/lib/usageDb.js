@@ -34,7 +34,6 @@ function getUserDataDir() {
 
 const DATA_DIR = getUserDataDir();
 const DB_FILE = isCloud ? null : path.join(DATA_DIR, "usage.sqlite");
-const LOG_FILE = isCloud ? null : path.join(DATA_DIR, "log.txt");
 
 if (!isCloud && fs && typeof fs.existsSync === "function") {
   try {
@@ -779,28 +778,6 @@ export async function getProviderStats() {
   }
 }
 
-function formatLogDate(date = new Date()) {
-  const pad = (n) => String(n).padStart(2, "0");
-  const d = pad(date.getDate());
-  const m = pad(date.getMonth() + 1);
-  const y = date.getFullYear();
-  const h = pad(date.getHours());
-  const min = pad(date.getMinutes());
-  const s = pad(date.getSeconds());
-  return `${d}-${m}-${y} ${h}:${min}:${s}`;
-}
-
-export async function appendRequestLog({ model, provider, connectionId, tokens, status }) {
-  if (isCloud || !LOG_FILE) return;
-
-  try {
-    const logEntry = `[${formatLogDate()}] ${provider}/${model} | tokens: ${tokens?.prompt_tokens || 0}+${tokens?.completion_tokens || 0} | status: ${status}`;
-    fs.appendFileSync(LOG_FILE, logEntry + "\n");
-  } catch (error) {
-    console.error("[usageDb] Failed to append request log:", error.message);
-  }
-}
-
 export async function getRecentLogs(limit = 200) {
   console.log("[usageDb] getRecentLogs called, isCloud:", isCloud);
 
@@ -834,52 +811,42 @@ export async function getRecentLogs(limit = 200) {
         model,
         provider,
         connection_id,
+        api_key,
         status,
         prompt_tokens,
-        completion_tokens
+        completion_tokens,
+        cached_tokens,
+        reasoning_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens
       FROM usage_history
       ORDER BY timestamp DESC
       LIMIT ?
     `).all(limit);
 
-    // Format to match appendRequestLog format: "[DD-MM-YYYY HH:MM:SS] provider/model | tokens: in+out | status: STATUS"
-    const logs = rows.map(row => {
-      const date = new Date(row.timestamp);
-      const pad = (n) => String(n).padStart(2, "0");
-      const formattedDate = `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-
-      const inTokens = row.prompt_tokens || 0;
-      const outTokens = row.completion_tokens || 0;
-
-      return `[${formattedDate}] ${row.provider}/${row.model} | tokens: ${inTokens}+${outTokens} | status: ${row.status.toUpperCase()}`;
-    });
+    // Return JSON objects instead of formatted strings
+    const logs = rows.map(row => ({
+      timestamp: row.timestamp,
+      provider: row.provider,
+      model: row.model,
+      connectionId: row.connection_id,
+      apiKey: row.api_key,
+      status: row.status,
+      tokens: {
+        prompt: row.prompt_tokens,
+        completion: row.completion_tokens,
+        cached: row.cached_tokens,
+        reasoning: row.reasoning_tokens,
+        cacheCreation: row.cache_creation_input_tokens,
+        cacheRead: row.cache_read_input_tokens
+      }
+    }));
 
     console.log("[usageDb] Returning", logs.length, "logs from SQLite");
     return logs;
   } catch (dbError) {
     console.error("[usageDb] Failed to read from SQLite:", dbError.message);
-
-    // Fallback to log.txt (old format)
-    if (!LOG_FILE) {
-      console.log("[usageDb] No LOG_FILE configured");
-      return [];
-    }
-
-    try {
-      if (!fs.existsSync(LOG_FILE)) {
-        console.log("[usageDb] Log file does not exist:", LOG_FILE);
-        return [];
-      }
-
-      const content = fs.readFileSync(LOG_FILE, "utf-8");
-      const lines = content.split("\n").filter(line => line.trim());
-      const result = lines.slice(-limit);
-      console.log("[usageDb] Returning", result.length, "log lines from log.txt (fallback)");
-      return result;
-    } catch (fileError) {
-      console.error("[usageDb] Failed to read log.txt:", fileError.message);
-      return [];
-    }
+    return [];
   }
 }
 
