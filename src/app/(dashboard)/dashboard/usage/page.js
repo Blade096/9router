@@ -1,12 +1,20 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { UsageStats, RequestLogger, CardSkeleton, SegmentedControl } from "@/shared/components";
 import ProviderLimits from "./components/ProviderLimits";
 import RequestDetailsTab from "./components/RequestDetailsTab";
 
 export default function UsagePage() {
   const [activeTab, setActiveTab] = useState("overview");
+  const [refreshInterval, setRefreshInterval] = useState(5000);
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then(res => res.json())
+      .then(data => setRefreshInterval(data.usageRefreshInterval || 5000))
+      .catch(err => console.error("Failed to load refresh interval:", err));
+  }, []);
 
   return (
     <div className="flex flex-col gap-6">
@@ -24,7 +32,7 @@ export default function UsagePage() {
       {/* Content */}
       {activeTab === "overview" && (
         <Suspense fallback={<CardSkeleton />}>
-          <UsageStats />
+          <UsageStats refreshInterval={refreshInterval} />
         </Suspense>
       )}
       {activeTab === "logs" && <RequestLogger />}

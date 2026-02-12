@@ -111,6 +111,23 @@ export default function ProfilePage() {
   };
 
   const updateObservabilitySetting = async (key, value) => {
+    // Handle boolean values directly
+    if (typeof value === 'boolean') {
+      try {
+        const res = await fetch("/api/settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [key]: value }),
+        });
+        if (res.ok) {
+          setSettings(prev => ({ ...prev, [key]: value }));
+        }
+      } catch (err) {
+        console.error(`Failed to update ${key}:`, err);
+      }
+      return;
+    }
+
     const numValue = parseInt(value);
     if (isNaN(numValue) || numValue < 1) return;
 
@@ -437,6 +454,39 @@ export default function ProfilePage() {
             <p className="text-xs text-text-muted italic pt-2 border-t border-border/50">
               Current: Keeps {settings.observabilityMaxRecords || 1000} records, batches every {settings.observabilityBatchSize || 20} requests, max {settings.observabilityMaxJsonSize || 1024}KB per field
             </p>
+
+            <div className="flex items-center justify-between pt-2 border-t border-border/50">
+              <div>
+                <p className="font-medium">Usage Refresh Interval (ms)</p>
+                <p className="text-sm text-text-muted">
+                  Time between automatic usage data refreshes (min 1000ms)
+                </p>
+              </div>
+              <Input
+                type="number"
+                min="1000"
+                max="60000"
+                step="1000"
+                value={settings.usageRefreshInterval || 5000}
+                onChange={(e) => updateObservabilitySetting("usageRefreshInterval", parseInt(e.target.value))}
+                disabled={loading}
+                className="w-28 text-center"
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">Adaptive Refresh</p>
+                <p className="text-sm text-text-muted">
+                  Automatically increase refresh interval when no new requests detected
+                </p>
+              </div>
+              <Toggle
+                checked={settings.usageAdaptiveRefresh !== false}
+                onChange={() => updateObservabilitySetting("usageAdaptiveRefresh", !settings.usageAdaptiveRefresh)}
+                disabled={loading}
+              />
+            </div>
           </div>
         </Card>
 
