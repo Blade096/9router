@@ -842,17 +842,16 @@ export async function getRecentLogs(limit = 200) {
       LIMIT ?
     `).all(limit);
 
-    // Format to match log.txt format: "DD-MM-YYYY HH:MM:SS | model | provider | account | in | out | status"
+    // Format to match appendRequestLog format: "[DD-MM-YYYY HH:MM:SS] provider/model | tokens: in+out | status: STATUS"
     const logs = rows.map(row => {
       const date = new Date(row.timestamp);
       const pad = (n) => String(n).padStart(2, "0");
       const formattedDate = `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 
-      const account = row.connection_id
-        ? row.connection_id.slice(0, 8) + "..."
-        : "unknown";
+      const inTokens = row.prompt_tokens || 0;
+      const outTokens = row.completion_tokens || 0;
 
-      return `${formattedDate} | ${row.model} | ${row.provider.toUpperCase()} | ${account} | ${row.prompt_tokens || "-"} | ${row.completion_tokens || "-"} | ${row.status.toUpperCase()}`;
+      return `[${formattedDate}] ${row.provider}/${row.model} | tokens: ${inTokens}+${outTokens} | status: ${row.status.toUpperCase()}`;
     });
 
     console.log("[usageDb] Returning", logs.length, "logs from SQLite");

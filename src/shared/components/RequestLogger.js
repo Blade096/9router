@@ -96,26 +96,66 @@ export default function RequestLogger() {
               </thead>
               <tbody className="divide-y divide-border/50">
                 {logs.map((log, i) => {
+                  // Parse both formats:
+                  // New format: "[DD-MM-YYYY HH:MM:SS] provider/model | tokens: in+out | status: STATUS"
+                  // Old format: "DD-MM-YYYY HH:MM:SS | model | provider | account | in | out | status"
                   const parts = log.split(" | ");
-                  if (parts.length < 7) return null;
 
-                  const status = parts[6];
+                  let timestamp, model, provider, account, inTokens, outTokens, status;
+
+                  if (parts.length >= 3) {
+                    // Try new format first
+                    const firstPart = parts[0];
+                    if (firstPart.startsWith("[")) {
+                      // New format
+                      timestamp = firstPart;
+                      const modelPart = parts[0].substring(firstPart.indexOf("] ") + 2);
+                      [provider, model] = modelPart.split("/");
+
+                      const tokensPart = parts[1] || "";
+                      const tokensMatch = tokensPart.match(/tokens:\s*(\d+)\+(\d+)/);
+                      if (tokensMatch) {
+                        inTokens = tokensMatch[1];
+                        outTokens = tokensMatch[2];
+                      }
+
+                      const statusPart = parts[2] || "";
+                      const statusMatch = statusPart.match(/status:\s*(.+)/);
+                      if (statusMatch) {
+                        status = statusMatch[1];
+                      }
+
+                      account = "-";
+                    } else if (parts.length >= 7) {
+                      // Old format
+                      timestamp = parts[0];
+                      model = parts[1];
+                      provider = parts[2];
+                      account = parts[3];
+                      inTokens = parts[4];
+                      outTokens = parts[5];
+                      status = parts[6];
+                    }
+                  }
+
+                  if (!status) return null;
+
                   const isPending = status.includes("PENDING");
                   const isFailed = status.includes("FAILED");
                   const isSuccess = status.includes("OK");
 
                   return (
                     <tr key={`log-${i}-${Date.now()}-${log.slice(0, 20)}`} className={`hover:bg-primary/5 transition-colors ${isPending ? 'bg-primary/5' : ''}`}>
-                      <td className="px-3 py-1.5 border-r border-border text-text-muted">{parts[0]}</td>
-                      <td className="px-3 py-1.5 border-r border-border font-medium">{parts[1]}</td>
+                      <td className="px-3 py-1.5 border-r border-border text-text-muted">{timestamp}</td>
+                      <td className="px-3 py-1.5 border-r border-border font-medium">{model || "-"}</td>
                       <td className="px-3 py-1.5 border-r border-border">
                         <span className="px-1.5 py-0.5 rounded bg-bg-subtle border border-border text-[10px] uppercase font-bold">
-                          {parts[2]}
+                          {provider || "-"}
                         </span>
                       </td>
-                      <td className="px-3 py-1.5 border-r border-border truncate max-w-[150px]" title={parts[3]}>{parts[3]}</td>
-                      <td className="px-3 py-1.5 border-r border-border text-right text-primary">{parts[4]}</td>
-                      <td className="px-3 py-1.5 border-r border-border text-right text-success">{parts[5]}</td>
+                      <td className="px-3 py-1.5 border-r border-border truncate max-w-[150px]" title={account}>{account || "-"}</td>
+                      <td className="px-3 py-1.5 border-r border-border text-right text-primary">{inTokens || "-"}</td>
+                      <td className="px-3 py-1.5 border-r border-border text-right text-success">{outTokens || "-"}</td>
                       <td className={`px-3 py-1.5 font-bold ${isSuccess ? 'text-success' :
                           isFailed ? 'text-error' :
                             'text-primary animate-pulse'
