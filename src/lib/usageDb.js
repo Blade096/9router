@@ -291,6 +291,8 @@ export async function getUsageDb() {
   }
 
   if (process.env.NODE_ENV === 'development' && global.__usageDb) {
+    // Always run migrations on cached instance to handle schema updates
+    initUsageDb(global.__usageDb);
     return global.__usageDb;
   }
 
@@ -302,8 +304,6 @@ export async function getUsageDb() {
     db.pragma('cache_size = -64000');
     db.pragma('busy_timeout = 5000');
 
-    initUsageDb(db);
-
     dbInstance = db;
     ensureShutdownHandler();
 
@@ -311,6 +311,9 @@ export async function getUsageDb() {
       global.__usageDb = dbInstance;
     }
   }
+
+  // Always run migrations to handle schema updates
+  initUsageDb(dbInstance);
 
   return dbInstance;
 }
