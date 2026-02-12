@@ -803,10 +803,8 @@ export async function getProviderStats() {
 }
 
 export async function getRecentLogs(limit = 200) {
-  console.log("[usageDb] getRecentLogs called, isCloud:", isCloud);
 
   if (isCloud) {
-    console.log("[usageDb] Returning empty array (isCloud)");
     return [];
   }
 
@@ -821,7 +819,6 @@ export async function getRecentLogs(limit = 200) {
         dbInstance.pragma('cache_size = -64000');
         dbInstance.pragma('busy_timeout = 5000');
         initUsageDb(dbInstance);
-        console.log("[usageDb] Database connection reopened in getRecentLogs");
       } catch (reinitError) {
         console.error("[usageDb] Failed to reopen database:", reinitError.message);
         return [];
@@ -873,8 +870,6 @@ export async function getRecentLogs(limit = 200) {
         cacheRead: row.cache_read_input_tokens
       }
     }));
-
-    console.log("[usageDb] Returning", logs.length, "logs from SQLite");
     return logs;
   } catch (dbError) {
     console.error("[usageDb] Failed to read from SQLite:", dbError.message);
