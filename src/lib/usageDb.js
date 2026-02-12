@@ -4,7 +4,8 @@ import os from "os";
 import fs from "fs";
 import { fileURLToPath } from "url";
 
-const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
+// Detect cloud environment - caches API exists in browser/edge, not in Node.js server
+const isCloud = typeof window !== 'undefined' || (typeof caches !== 'undefined' && caches !== null && typeof caches === 'object');
 
 function getAppName() {
   return "9router";
@@ -801,14 +802,24 @@ export async function appendRequestLog({ model, provider, connectionId, tokens, 
 }
 
 export async function getRecentLogs(limit = 200) {
-  if (isCloud || !LOG_FILE) return [];
+  console.log("[usageDb] getRecentLogs called, isCloud:", isCloud, "LOG_FILE:", LOG_FILE);
+
+  if (isCloud || !LOG_FILE) {
+    console.log("[usageDb] Returning empty array (isCloud or no LOG_FILE)");
+    return [];
+  }
 
   try {
-    if (!fs.existsSync(LOG_FILE)) return [];
+    if (!fs.existsSync(LOG_FILE)) {
+      console.log("[usageDb] Log file does not exist:", LOG_FILE);
+      return [];
+    }
 
     const content = fs.readFileSync(LOG_FILE, "utf-8");
     const lines = content.split("\n").filter(line => line.trim());
-    return lines.slice(-limit);
+    const result = lines.slice(-limit);
+    console.log("[usageDb] Returning", result.length, "log lines");
+    return result;
   } catch (error) {
     console.error("[usageDb] Failed to read recent logs:", error.message);
     return [];
