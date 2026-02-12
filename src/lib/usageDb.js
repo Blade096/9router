@@ -848,7 +848,8 @@ export async function getRecentLogs(limit = 200) {
         cached_tokens,
         reasoning_tokens,
         cache_creation_input_tokens,
-        cache_read_input_tokens
+        cache_read_input_tokens,
+        request_id
       FROM usage_history
       ORDER BY timestamp DESC
       LIMIT ?
@@ -862,6 +863,7 @@ export async function getRecentLogs(limit = 200) {
       connectionId: row.connection_id,
       apiKey: row.api_key,
       status: row.status,
+      requestId: row.request_id,
       tokens: {
         prompt: row.prompt_tokens,
         completion: row.completion_tokens,

@@ -107,11 +107,15 @@ export default function RequestLogger() {
                     if (!status) return null;
 
                     const isPending = status === "pending" || status.includes("PENDING");
-                    const isFailed = status === "error" || status.includes("FAILED");
-                    const isSuccess = status === "success" || status.includes("OK");
+                    const isFailed = status === "error" || status.includes("FAILED") || status.includes("ERROR");
+                    const isSuccess = status === "success" || status.includes("OK") || status === "200 OK";
 
-                    const statusDisplay = status === "pending" ? "PENDING" : status === "success" ? "SUCCESS" : status === "error" ? "ERROR" : status;
-                    const statusColor = isPending ? "text-yellow-500 animate-pulse" : isSuccess ? "text-success" : isFailed ? "text-error" : "text-primary";
+                    const statusDisplay = isPending ? "PENDING" : isSuccess ? "SUCCESS" : isFailed ? "ERROR" : status;
+                    
+                    let statusColor = "text-primary";
+                    if (isPending) statusColor = "text-yellow-500 animate-pulse";
+                    else if (isSuccess) statusColor = "text-green-500";
+                    else if (isFailed) statusColor = "text-red-500";
 
                     return (
                       <tr key={`log-${i}-${Date.now()}-${log.timestamp}`} className={`hover:bg-primary/5 transition-colors ${isPending ? 'bg-yellow-500/10' : ''}`}>
