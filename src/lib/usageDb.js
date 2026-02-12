@@ -802,27 +802,85 @@ export async function appendRequestLog({ model, provider, connectionId, tokens, 
 }
 
 export async function getRecentLogs(limit = 200) {
-  console.log("[usageDb] getRecentLogs called, isCloud:", isCloud, "LOG_FILE:", LOG_FILE);
+  console.log("[usageDb] getRecentLogs called, isCloud:", isCloud);
 
-  if (isCloud || !LOG_FILE) {
-    console.log("[usageDb] Returning empty array (isCloud or no LOG_FILE)");
+  if (isCloud) {
+    console.log("[usageDb] Returning empty array (isCloud)");
     return [];
   }
 
+  // First try SQLite database (new format)
   try {
-    if (!fs.existsSync(LOG_FILE)) {
-      console.log("[usageDb] Log file does not exist:", LOG_FILE);
+    const db = await getUsageDb();
+
+    // Check if database connection is open, reinitialize if needed
+    if (!db.open && dbInstance) {
+      try {
+        dbInstance = new Database(DB_FILE);
+        dbInstance.pragma('journal_mode = WAL');
+        dbInstance.pragma('synchronous = NORMAL');
+        dbInstance.pragma('cache_size = -64000');
+        dbInstance.pragma('busy_timeout = 5000');
+        initUsageDb(dbInstance);
+        console.log("[usageDb] Database connection reopened in getRecentLogs");
+      } catch (reinitError) {
+        console.error("[usageDb] Failed to reopen database:", reinitError.message);
+      }
+    }
+
+    const rows = db.prepare(`
+      SELECT
+        timestamp,
+        model,
+        provider,
+        connection_id,
+        status,
+        prompt_tokens,
+        completion_tokens
+      FROM usage_history
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `).all(limit);
+
+    // Format to match log.txt format: "DD-MM-YYYY HH:MM:SS | model | provider | account | in | out | status"
+    const logs = rows.map(row => {
+      const date = new Date(row.timestamp);
+      const pad = (n) => String(n).padStart(2, "0");
+      const formattedDate = `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+
+      const account = row.connection_id
+        ? row.connection_id.slice(0, 8) + "..."
+        : "unknown";
+
+      return `${formattedDate} | ${row.model} | ${row.provider.toUpperCase()} | ${account} | ${row.prompt_tokens || "-"} | ${row.completion_tokens || "-"} | ${row.status.toUpperCase()}`;
+    });
+
+    console.log("[usageDb] Returning", logs.length, "logs from SQLite");
+    return logs;
+  } catch (dbError) {
+    console.error("[usageDb] Failed to read from SQLite:", dbError.message);
+
+    // Fallback to log.txt (old format)
+    if (!LOG_FILE) {
+      console.log("[usageDb] No LOG_FILE configured");
       return [];
     }
 
-    const content = fs.readFileSync(LOG_FILE, "utf-8");
-    const lines = content.split("\n").filter(line => line.trim());
-    const result = lines.slice(-limit);
-    console.log("[usageDb] Returning", result.length, "log lines");
-    return result;
-  } catch (error) {
-    console.error("[usageDb] Failed to read recent logs:", error.message);
-    return [];
+    try {
+      if (!fs.existsSync(LOG_FILE)) {
+        console.log("[usageDb] Log file does not exist:", LOG_FILE);
+        return [];
+      }
+
+      const content = fs.readFileSync(LOG_FILE, "utf-8");
+      const lines = content.split("\n").filter(line => line.trim());
+      const result = lines.slice(-limit);
+      console.log("[usageDb] Returning", result.length, "log lines from log.txt (fallback)");
+      return result;
+    } catch (fileError) {
+      console.error("[usageDb] Failed to read log.txt:", fileError.message);
+      return [];
+    }
   }
 }
 
