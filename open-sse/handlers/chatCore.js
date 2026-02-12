@@ -588,6 +588,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
         model: model || "unknown",
         tokens: usage,
         timestamp: new Date().toISOString(),
+        status: "success",
         connectionId: connectionId || undefined,
         apiKey: apiKey || undefined
       }).catch(err => {
@@ -706,6 +707,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
         model: model || "unknown",
         tokens: usage,
         timestamp: new Date().toISOString(),
+        status: "success",
         connectionId: connectionId || undefined,
         apiKey: apiKey || undefined
       }).catch(err => {

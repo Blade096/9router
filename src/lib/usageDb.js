@@ -167,13 +167,16 @@ async function flushToDatabase() {
           timestamp = Date.now();
         }
 
+        // Ensure status is valid - use "success" as fallback
+        const status = item.status || "success";
+
         stmt.run(
           item.provider,
           item.model,
           item.connectionId || null,
           item.apiKey || null,
           timestamp,
-          item.status,
+          status,
           item.tokens?.prompt_tokens || 0,
           item.tokens?.completion_tokens || 0,
           item.tokens?.cached_tokens || 0,
