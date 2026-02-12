@@ -275,45 +275,72 @@ function ensureShutdownHandler() {
 }
 
 export async function getUsageDb() {
+  // Cloud environment: return mock instance
   if (isCloud) {
-    if (!dbInstance) {
-      dbInstance = {
-        prepare: () => ({
-          run: () => {},
-          get: () => null,
-          all: () => []
-        }),
-        exec: () => {},
-        pragma: () => {},
-        close: () => {}
-      };
-    }
+    return getCloudMockDb();
+  }
+
+  // Get or create database instance
+  const db = getOrCreateDbInstance();
+  
+  // Always run migrations (idempotent, handles schema updates)
+  initUsageDb(db);
+  
+  return db;
+}
+
+function getCloudMockDb() {
+  if (!dbInstance) {
+    dbInstance = {
+      prepare: () => ({
+        run: () => {},
+        get: () => null,
+        all: () => []
+      }),
+      exec: () => {},
+      pragma: () => {},
+      close: () => {}
+    };
+  }
+  return dbInstance;
+}
+
+function getOrCreateDbInstance() {
+  // Check global cache (development hot-reload support)
+  if (process.env.NODE_ENV === 'development' && global.__usageDb) {
+    dbInstance = global.__usageDb;
     return dbInstance;
   }
-
-  if (process.env.NODE_ENV === 'development' && global.__usageDb) {
-    return global.__usageDb;
+  
+  // Check local singleton
+  if (dbInstance) {
+    return dbInstance;
   }
-
-  if (!dbInstance) {
-    const db = new Database(DB_FILE);
-
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.pragma('cache_size = -64000');
-    db.pragma('busy_timeout = 5000');
-
-    initUsageDb(db);
-
-    dbInstance = db;
-    ensureShutdownHandler();
-
-    if (process.env.NODE_ENV === 'development') {
-      global.__usageDb = dbInstance;
-    }
+  
+  // Create new instance
+  const db = createDbConnection();
+  dbInstance = db;
+  
+  // Register shutdown handlers
+  ensureShutdownHandler();
+  
+  // Cache for development hot-reload
+  if (process.env.NODE_ENV === 'development') {
+    global.__usageDb = dbInstance;
   }
-
+  
   return dbInstance;
+}
+
+function createDbConnection() {
+  const db = new Database(DB_FILE);
+  
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('cache_size = -64000');
+  db.pragma('busy_timeout = 5000');
+  
+  return db;
 }
 
 export async function saveRequestUsage(entry) {
