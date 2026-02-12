@@ -148,6 +148,22 @@ async function flushToDatabase() {
 
     const db = await getUsageDb();
 
+    // Check if database connection is open, reinitialize if needed
+    if (!db.open && dbInstance) {
+      try {
+        dbInstance = new Database(DB_FILE);
+        dbInstance.pragma('journal_mode = WAL');
+        dbInstance.pragma('synchronous = NORMAL');
+        dbInstance.pragma('cache_size = -64000');
+        dbInstance.pragma('busy_timeout = 5000');
+        initUsageDb(dbInstance);
+        console.log("[usageDb] Database connection reopened");
+      } catch (reinitError) {
+        console.error("[usageDb] Failed to reopen database:", reinitError.message);
+        return;
+      }
+    }
+
     const stmt = db.prepare(`
       INSERT INTO usage_history
       (provider, model, connection_id, api_key, timestamp, status,
