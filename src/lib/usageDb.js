@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { getPricingForModel, calculateCostFromTokens } from "@/shared/constants/pricing.js";
 
 // Detect cloud environment - caches API exists in browser/edge, not in Node.js server
 const isCloud = typeof window !== 'undefined' || (typeof caches !== 'undefined' && caches !== null && typeof caches === 'object');
@@ -401,7 +402,19 @@ export async function getUsageStats() {
 
   for (const row of result) {
     const entryTime = new Date(row.timestamp);
-    const entryCost = 0;
+
+    const pricing = getPricingForModel(row.provider, row.model);
+    const entryCost = calculateCostFromTokens(
+      {
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        cached_tokens: row.cached_tokens,
+        reasoning_tokens: row.reasoning_tokens,
+        cache_creation_input_tokens: row.cache_creation_input_tokens,
+        cache_read_input_tokens: row.cache_read_input_tokens
+      },
+      pricing
+    );
 
     stats.totalPromptTokens += row.prompt_tokens || 0;
     stats.totalCompletionTokens += row.completion_tokens || 0;
