@@ -21,11 +21,11 @@ const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
 
 /**
  * Controls whether to read from SQLite or fall back to LowDB.
- * Default: false (read from LowDB, write to both)
- * Set USE_SQLITE_USAGE=true to read from SQLite
+ * Default: true (read from SQLite, write to both)
+ * Set USE_SQLITE_USAGE=false to read from LowDB
  * @type {boolean}
  */
-const USE_SQLITE_READ = process.env.USE_SQLITE_USAGE === 'true';
+const USE_SQLITE_READ = process.env.USE_SQLITE_USAGE !== 'false';
 
 function getAppName() {
   return "9router";
@@ -327,293 +327,282 @@ export async function getUsageStats() {
     };
   }
 
-  if (USE_SQLITE_READ) {
-    try {
-      const db = await getUsageDb();
+  const db = await getUsageDb();
 
-      const result = db.prepare(`
-        SELECT
-          provider,
-          model,
-          connection_id,
-          api_key,
-          timestamp,
-          status,
-          prompt_tokens,
-          completion_tokens,
-          cached_tokens,
-          reasoning_tokens,
-          cache_creation_input_tokens,
-          cache_read_input_tokens
-        FROM usage_history
-        ORDER BY timestamp DESC
-      `).all();
+  const result = db.prepare(`
+    SELECT
+      provider,
+      model,
+      connection_id,
+      api_key,
+      timestamp,
+      status,
+      prompt_tokens,
+      completion_tokens,
+      cached_tokens,
+      reasoning_tokens,
+      cache_creation_input_tokens,
+      cache_read_input_tokens
+    FROM usage_history
+    ORDER BY timestamp DESC
+  `).all();
 
-      const stats = {
-        totalRequests: result.length,
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        totalCost: 0,
-        byProvider: {},
-        byModel: {},
-        byAccount: {},
-        byApiKey: {},
-        last10Minutes: [],
-        pending: pendingRequests,
-        activeRequests: []
+  const stats = {
+    totalRequests: result.length,
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+    totalCost: 0,
+    byProvider: {},
+    byModel: {},
+    byAccount: {},
+    byApiKey: {},
+    last10Minutes: [],
+    pending: pendingRequests,
+    activeRequests: []
+  };
+
+  const { getProviderConnections, getApiKeys } = await import("@/lib/localDb.js");
+
+  let allConnections = [];
+  try {
+    allConnections = await getProviderConnections();
+  } catch {}
+
+  const connectionMap = {};
+  for (const conn of allConnections) {
+    connectionMap[conn.id] = conn.name || conn.email || conn.id;
+  }
+
+  let allApiKeys = [];
+  try {
+    allApiKeys = await getApiKeys();
+  } catch {}
+
+  const apiKeyMap = {};
+  for (const key of allApiKeys) {
+    apiKeyMap[key.key] = { name: key.name, id: key.id };
+  }
+
+  const now = new Date();
+  const currentMinuteStart = new Date(Math.floor(now.getTime() / 60000) * 60000);
+  const tenMinutesAgo = new Date(currentMinuteStart.getTime() - 9 * 60 * 1000);
+
+  const bucketMap = {};
+  for (let i = 0; i < 10; i++) {
+    const bucketTime = new Date(currentMinuteStart.getTime() - (9 - i) * 60 * 1000);
+    const bucketKey = bucketTime.getTime();
+    bucketMap[bucketKey] = {
+      requests: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      cost: 0
+    };
+    stats.last10Minutes.push(bucketMap[bucketKey]);
+  }
+
+  for (const row of result) {
+    const entryTime = new Date(row.timestamp);
+    const entryCost = 0;
+
+    stats.totalPromptTokens += row.prompt_tokens || 0;
+    stats.totalCompletionTokens += row.completion_tokens || 0;
+    stats.totalCost += entryCost;
+
+    if (entryTime >= tenMinutesAgo && entryTime <= now) {
+      const entryMinuteStart = Math.floor(entryTime.getTime() / 60000) * 60000;
+      if (bucketMap[entryMinuteStart]) {
+        bucketMap[entryMinuteStart].requests++;
+        bucketMap[entryMinuteStart].promptTokens += row.prompt_tokens || 0;
+        bucketMap[entryMinuteStart].completionTokens += row.completion_tokens || 0;
+        bucketMap[entryMinuteStart].cost += entryCost;
+      }
+    }
+
+    if (!stats.byProvider[row.provider]) {
+      stats.byProvider[row.provider] = {
+        requests: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        cost: 0
       };
+    }
+    stats.byProvider[row.provider].requests++;
+    stats.byProvider[row.provider].promptTokens += row.prompt_tokens || 0;
+    stats.byProvider[row.provider].completionTokens += row.completion_tokens || 0;
+    stats.byProvider[row.provider].cost += entryCost;
 
-      const { getProviderConnections, getApiKeys } = await import("@/lib/localDb.js");
+    const modelKey = row.provider ? `${row.model} (${row.provider})` : row.model;
+    if (!stats.byModel[modelKey]) {
+      stats.byModel[modelKey] = {
+        requests: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        cost: 0,
+        rawModel: row.model,
+        provider: row.provider,
+        lastUsed: row.timestamp
+      };
+    }
+    stats.byModel[modelKey].requests++;
+    stats.byModel[modelKey].promptTokens += row.prompt_tokens || 0;
+    stats.byModel[modelKey].completionTokens += row.completion_tokens || 0;
+    stats.byModel[modelKey].cost += entryCost;
+    if (entryTime > new Date(stats.byModel[modelKey].lastUsed)) {
+      stats.byModel[modelKey].lastUsed = row.timestamp;
+    }
 
-      let allConnections = [];
-      try {
-        allConnections = await getProviderConnections();
-      } catch {}
-
-      const connectionMap = {};
-      for (const conn of allConnections) {
-        connectionMap[conn.id] = conn.name || conn.email || conn.id;
-      }
-
-      let allApiKeys = [];
-      try {
-        allApiKeys = await getApiKeys();
-      } catch {}
-
-      const apiKeyMap = {};
-      for (const key of allApiKeys) {
-        apiKeyMap[key.key] = { name: key.name, id: key.id };
-      }
-
-      const now = new Date();
-      const currentMinuteStart = new Date(Math.floor(now.getTime() / 60000) * 60000);
-      const tenMinutesAgo = new Date(currentMinuteStart.getTime() - 9 * 60 * 1000);
-
-      const bucketMap = {};
-      for (let i = 0; i < 10; i++) {
-        const bucketTime = new Date(currentMinuteStart.getTime() - (9 - i) * 60 * 1000);
-        const bucketKey = bucketTime.getTime();
-        bucketMap[bucketKey] = {
+    if (row.connection_id) {
+      const accountName = connectionMap[row.connection_id] || `Account ${row.connection_id.slice(0, 8)}...`;
+      const accountKey = `${row.model} (${row.provider} - ${accountName})`;
+      if (!stats.byAccount[accountKey]) {
+        stats.byAccount[accountKey] = {
           requests: 0,
           promptTokens: 0,
           completionTokens: 0,
-          cost: 0
+          cost: 0,
+          rawModel: row.model,
+          provider: row.provider,
+          connectionId: row.connection_id,
+          accountName: accountName,
+          lastUsed: row.timestamp
         };
-        stats.last10Minutes.push(bucketMap[bucketKey]);
       }
-
-      for (const row of result) {
-        const entryTime = new Date(row.timestamp);
-        const entryCost = 0;
-
-        stats.totalPromptTokens += row.prompt_tokens || 0;
-        stats.totalCompletionTokens += row.completion_tokens || 0;
-        stats.totalCost += entryCost;
-
-        if (entryTime >= tenMinutesAgo && entryTime <= now) {
-          const entryMinuteStart = Math.floor(entryTime.getTime() / 60000) * 60000;
-          if (bucketMap[entryMinuteStart]) {
-            bucketMap[entryMinuteStart].requests++;
-            bucketMap[entryMinuteStart].promptTokens += row.prompt_tokens || 0;
-            bucketMap[entryMinuteStart].completionTokens += row.completion_tokens || 0;
-            bucketMap[entryMinuteStart].cost += entryCost;
-          }
-        }
-
-        if (!stats.byProvider[row.provider]) {
-          stats.byProvider[row.provider] = {
-            requests: 0,
-            promptTokens: 0,
-            completionTokens: 0,
-            cost: 0
-          };
-        }
-        stats.byProvider[row.provider].requests++;
-        stats.byProvider[row.provider].promptTokens += row.prompt_tokens || 0;
-        stats.byProvider[row.provider].completionTokens += row.completion_tokens || 0;
-        stats.byProvider[row.provider].cost += entryCost;
-
-        const modelKey = row.provider ? `${row.model} (${row.provider})` : row.model;
-        if (!stats.byModel[modelKey]) {
-          stats.byModel[modelKey] = {
-            requests: 0,
-            promptTokens: 0,
-            completionTokens: 0,
-            cost: 0,
-            rawModel: row.model,
-            provider: row.provider,
-            lastUsed: row.timestamp
-          };
-        }
-        stats.byModel[modelKey].requests++;
-        stats.byModel[modelKey].promptTokens += row.prompt_tokens || 0;
-        stats.byModel[modelKey].completionTokens += row.completion_tokens || 0;
-        stats.byModel[modelKey].cost += entryCost;
-        if (entryTime > new Date(stats.byModel[modelKey].lastUsed)) {
-          stats.byModel[modelKey].lastUsed = row.timestamp;
-        }
-
-        if (row.connection_id) {
-          const accountName = connectionMap[row.connection_id] || `Account ${row.connection_id.slice(0, 8)}...`;
-          const accountKey = `${row.model} (${row.provider} - ${accountName})`;
-          if (!stats.byAccount[accountKey]) {
-            stats.byAccount[accountKey] = {
-              requests: 0,
-              promptTokens: 0,
-              completionTokens: 0,
-              cost: 0,
-              rawModel: row.model,
-              provider: row.provider,
-              connectionId: row.connection_id,
-              accountName: accountName,
-              lastUsed: row.timestamp
-            };
-          }
-          stats.byAccount[accountKey].requests++;
-          stats.byAccount[accountKey].promptTokens += row.prompt_tokens || 0;
-          stats.byAccount[accountKey].completionTokens += row.completion_tokens || 0;
-          stats.byAccount[accountKey].cost += entryCost;
-          if (entryTime > new Date(stats.byAccount[accountKey].lastUsed)) {
-            stats.byAccount[accountKey].lastUsed = row.timestamp;
-          }
-        }
-
-        if (row.api_key) {
-          const keyInfo = apiKeyMap[row.api_key];
-          const keyName = keyInfo?.name || row.api_key.slice(0, 8) + "...";
-          const apiKeyKey = row.api_key;
-          const apiKeyModelKey = `${apiKeyKey}|${row.model}|${row.provider || 'unknown'}`;
-          if (!stats.byApiKey[apiKeyModelKey]) {
-            stats.byApiKey[apiKeyModelKey] = {
-              requests: 0,
-              promptTokens: 0,
-              completionTokens: 0,
-              cost: 0,
-              rawModel: row.model,
-              provider: row.provider,
-              apiKey: row.api_key,
-              keyName: keyName,
-              apiKeyKey: apiKeyKey,
-              lastUsed: row.timestamp
-            };
-          }
-          const apiKeyEntry = stats.byApiKey[apiKeyModelKey];
-          apiKeyEntry.requests++;
-          apiKeyEntry.promptTokens += row.prompt_tokens || 0;
-          apiKeyEntry.completionTokens += row.completion_tokens || 0;
-          apiKeyEntry.cost += entryCost;
-          if (entryTime > new Date(apiKeyEntry.lastUsed)) {
-            apiKeyEntry.lastUsed = row.timestamp;
-          }
-        } else {
-          const apiKeyKey = "local-no-key";
-          const keyName = "Local (No API Key)";
-          if (!stats.byApiKey[apiKeyKey]) {
-            stats.byApiKey[apiKeyKey] = {
-              requests: 0,
-              promptTokens: 0,
-              completionTokens: 0,
-              cost: 0,
-              rawModel: row.model,
-              provider: row.provider,
-              apiKey: null,
-              keyName: keyName,
-              apiKeyKey: apiKeyKey,
-              lastUsed: row.timestamp
-            };
-          }
-          const apiKeyEntry = stats.byApiKey[apiKeyKey];
-          apiKeyEntry.requests++;
-          apiKeyEntry.promptTokens += row.prompt_tokens || 0;
-          apiKeyEntry.completionTokens += row.completion_tokens || 0;
-          apiKeyEntry.cost += entryCost;
-          if (entryTime > new Date(apiKeyEntry.lastUsed)) {
-            apiKeyEntry.lastUsed = row.timestamp;
-          }
-        }
+      stats.byAccount[accountKey].requests++;
+      stats.byAccount[accountKey].promptTokens += row.prompt_tokens || 0;
+      stats.byAccount[accountKey].completionTokens += row.completion_tokens || 0;
+      stats.byAccount[accountKey].cost += entryCost;
+      if (entryTime > new Date(stats.byAccount[accountKey].lastUsed)) {
+        stats.byAccount[accountKey].lastUsed = row.timestamp;
       }
+    }
 
-      for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
-        for (const [modelKey, count] of Object.entries(models)) {
-          if (count > 0) {
-            const match = modelKey.match(/^(.*) \((.*)\)$/);
-            const modelName = match ? match[1] : modelKey;
-            const providerName = match ? match[2] : "unknown";
-            const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
-
-            stats.activeRequests.push({
-              model: modelName,
-              provider: providerName,
-              account: accountName,
-              count
-            });
-          }
-        }
+    if (row.api_key) {
+      const keyInfo = apiKeyMap[row.api_key];
+      const keyName = keyInfo?.name || row.api_key.slice(0, 8) + "...";
+      const apiKeyKey = row.api_key;
+      const apiKeyModelKey = `${apiKeyKey}|${row.model}|${row.provider || 'unknown'}`;
+      if (!stats.byApiKey[apiKeyModelKey]) {
+        stats.byApiKey[apiKeyModelKey] = {
+          requests: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          cost: 0,
+          rawModel: row.model,
+          provider: row.provider,
+          apiKey: row.api_key,
+          keyName: keyName,
+          apiKeyKey: apiKeyKey,
+          lastUsed: row.timestamp
+        };
       }
-
-      return stats;
-    } catch (error) {
-      console.warn("[usageDb] SQLite read failed, falling back to LowDB:", error.message);
+      const apiKeyEntry = stats.byApiKey[apiKeyModelKey];
+      apiKeyEntry.requests++;
+      apiKeyEntry.promptTokens += row.prompt_tokens || 0;
+      apiKeyEntry.completionTokens += row.completion_tokens || 0;
+      apiKeyEntry.cost += entryCost;
+      if (entryTime > new Date(apiKeyEntry.lastUsed)) {
+        apiKeyEntry.lastUsed = row.timestamp;
+      }
+    } else {
+      const apiKeyKey = "local-no-key";
+      const keyName = "Local (No API Key)";
+      if (!stats.byApiKey[apiKeyKey]) {
+        stats.byApiKey[apiKeyKey] = {
+          requests: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          cost: 0,
+          rawModel: row.model,
+          provider: row.provider,
+          apiKey: null,
+          keyName: keyName,
+          apiKeyKey: apiKeyKey,
+          lastUsed: row.timestamp
+        };
+      }
+      const apiKeyEntry = stats.byApiKey[apiKeyKey];
+      apiKeyEntry.requests++;
+      apiKeyEntry.promptTokens += row.prompt_tokens || 0;
+      apiKeyEntry.completionTokens += row.completion_tokens || 0;
+      apiKeyEntry.cost += entryCost;
+      if (entryTime > new Date(apiKeyEntry.lastUsed)) {
+        apiKeyEntry.lastUsed = row.timestamp;
+      }
     }
   }
 
-  return await getUsageStatsLowDB();
+  for (const [connectionId, models] of Object.entries(pendingRequests.byAccount)) {
+    for (const [modelKey, count] of Object.entries(models)) {
+      if (count > 0) {
+        const match = modelKey.match(/^(.*) \((.*)\)$/);
+        const modelName = match ? match[1] : modelKey;
+        const providerName = match ? match[2] : "unknown";
+        const accountName = connectionMap[connectionId] || `Account ${connectionId.slice(0, 8)}...`;
+
+        stats.activeRequests.push({
+          model: modelName,
+          provider: providerName,
+          account: accountName,
+          count
+        });
+      }
+    }
+  }
+
+  return stats;
 }
 
 export async function getUsageHistory(filter = {}) {
-  if (USE_SQLITE_READ) {
-    try {
-      const db = await getUsageDb();
+  const db = await getUsageDb();
 
-      let query = "SELECT * FROM usage_history WHERE 1=1";
-      const params = [];
+  let query = "SELECT * FROM usage_history WHERE 1=1";
+  const params = [];
 
-      if (filter.provider) {
-        query += " AND provider = ?";
-        params.push(filter.provider);
-      }
-
-      if (filter.model) {
-        query += " AND model = ?";
-        params.push(filter.model);
-      }
-
-      if (filter.startDate) {
-        query += " AND timestamp >= ?";
-        params.push(new Date(filter.startDate).getTime());
-      }
-
-      if (filter.endDate) {
-        query += " AND timestamp <= ?";
-        params.push(new Date(filter.endDate).getTime());
-      }
-
-      query += " ORDER BY timestamp DESC";
-
-      const rows = db.prepare(query).all(...params);
-
-      return rows.map(row => ({
-        provider: row.provider,
-        model: row.model,
-        connectionId: row.connection_id,
-        apiKey: row.api_key,
-        timestamp: new Date(row.timestamp).toISOString(),
-        status: row.status,
-        tokens: {
-          prompt_tokens: row.prompt_tokens,
-          completion_tokens: row.completion_tokens,
-          cached_tokens: row.cached_tokens,
-          reasoning_tokens: row.reasoning_tokens,
-          cache_creation_input_tokens: row.cache_creation_input_tokens,
-          cache_read_input_tokens: row.cache_read_input_tokens
-        }
-      }));
-    } catch (error) {
-      console.warn("[usageDb] SQLite read failed, falling back to LowDB:", error.message);
-    }
+  if (filter.provider) {
+    query += " AND provider = ?";
+    params.push(filter.provider);
   }
 
-  return await getUsageHistoryLowDB(filter);
+  if (filter.model) {
+    query += " AND model = ?";
+    params.push(filter.model);
+  }
+
+  if (filter.startDate) {
+    query += " AND timestamp >= ?";
+    params.push(new Date(filter.startDate).getTime());
+  }
+
+  if (filter.endDate) {
+    query += " AND timestamp <= ?";
+    params.push(new Date(filter.endDate).getTime());
+  }
+
+  query += " ORDER BY timestamp DESC";
+
+  if (filter.limit) {
+    query += " LIMIT ?";
+    params.push(filter.limit);
+  }
+
+  const rows = db.prepare(query).all(...params);
+
+  return rows.map(row => ({
+    provider: row.provider,
+    model: row.model,
+    connectionId: row.connection_id,
+    apiKey: row.api_key,
+    timestamp: new Date(row.timestamp).toISOString(),
+    status: row.status,
+    tokens: {
+      prompt_tokens: row.prompt_tokens,
+      completion_tokens: row.completion_tokens,
+      cached_tokens: row.cached_tokens,
+      reasoning_tokens: row.reasoning_tokens,
+      cache_creation_input_tokens: row.cache_creation_input_tokens,
+      cache_read_input_tokens: row.cache_read_input_tokens
+    }
+  }));
 }
 
 export async function clearUsageHistory() {
