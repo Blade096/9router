@@ -158,12 +158,21 @@ async function flushToDatabase() {
 
     const transaction = db.transaction((items) => {
       for (const item of items) {
+        // Ensure timestamp is valid - use current time as fallback
+        let timestamp;
+        if (item.timestamp) {
+          const parsed = new Date(item.timestamp).getTime();
+          timestamp = Number.isFinite(parsed) ? parsed : Date.now();
+        } else {
+          timestamp = Date.now();
+        }
+
         stmt.run(
           item.provider,
           item.model,
           item.connectionId || null,
           item.apiKey || null,
-          new Date(item.timestamp).getTime(),
+          timestamp,
           item.status,
           item.tokens?.prompt_tokens || 0,
           item.tokens?.completion_tokens || 0,
