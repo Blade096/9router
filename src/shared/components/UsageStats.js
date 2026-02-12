@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
+import { useState, useEffect, useMemo, useCallback, Fragment, useRef } from "react";
 import PropTypes from "prop-types";
 import { useSearchParams, useRouter } from "next/navigation";
 import Card from "./Card";
@@ -39,7 +39,11 @@ MiniBarGraph.propTypes = {
   colorClass: PropTypes.string,
 };
 
-export default function UsageStats() {
+UsageStats.propTypes = {
+  refreshInterval: PropTypes.number,
+};
+
+export default function UsageStats({ refreshInterval: propRefreshInterval }) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -53,9 +57,28 @@ export default function UsageStats() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [viewMode, setViewMode] = useState("tokens"); // 'tokens' or 'costs'
-  const [refreshInterval, setRefreshInterval] = useState(5000); // Start with 5s
-  const [prevTotalRequests, setPrevTotalRequests] = useState(0);
+   const [viewMode, setViewMode] = useState("tokens");
+  const [displayRefreshInterval, setDisplayRefreshInterval] = useState(propRefreshInterval);
+  const refreshIntervalRef = useRef(propRefreshInterval);
+  const prevTotalRequestsRef = useRef(0);
+  const [adaptiveRefresh, setAdaptiveRefresh] = useState(true);
+  const adaptiveRefreshRef = useRef(true);
+
+  useEffect(() => {
+    adaptiveRefreshRef.current = adaptiveRefresh;
+  }, [adaptiveRefresh]);
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.usageAdaptiveRefresh !== undefined) {
+          setAdaptiveRefresh(data.usageAdaptiveRefresh);
+        }
+      })
+      .catch((err) => console.error("Failed to fetch settings for usage stats:", err));
+  }, []);
+
   const [expandedModels, setExpandedModels] = useState(new Set());
   const [expandedAccounts, setExpandedAccounts] = useState(new Set());
   const [expandedApiKeys, setExpandedApiKeys] = useState(new Set());
@@ -242,23 +265,32 @@ export default function UsageStats() {
         const data = await res.json();
         setStats(data);
 
-        // Smart polling: adjust interval based on activity
         const currentTotal = data.totalRequests || 0;
-        if (currentTotal > prevTotalRequests) {
-          // New requests detected - reset to fast polling
-          setRefreshInterval(5000);
+        
+        if (adaptiveRefreshRef.current) {
+          if (currentTotal > prevTotalRequestsRef.current) {
+            refreshIntervalRef.current = propRefreshInterval;
+            setDisplayRefreshInterval(propRefreshInterval);
+          } else {
+            const newInterval = Math.min(refreshIntervalRef.current * 2, 60000);
+            refreshIntervalRef.current = newInterval;
+            setDisplayRefreshInterval(newInterval);
+          }
         } else {
-          // No change - increase interval (exponential backoff)
-          setRefreshInterval((prev) => Math.min(prev * 2, 60000)); // Max 60s
+          if (refreshIntervalRef.current !== propRefreshInterval) {
+            refreshIntervalRef.current = propRefreshInterval;
+            setDisplayRefreshInterval(propRefreshInterval);
+          }
         }
-        setPrevTotalRequests(currentTotal);
+        
+        prevTotalRequestsRef.current = currentTotal;
       }
     } catch (error) {
       console.error("Failed to fetch usage stats:", error);
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [prevTotalRequests]);
+  }, [propRefreshInterval]);
 
   useEffect(() => {
     fetchStats();
@@ -377,16 +409,16 @@ export default function UsageStats() {
       
       intervalId = setInterval(() => {
         if (isPageVisible) {
-          fetchStats(false); // fetch without loading skeleton
+          fetchStats(false);
         }
-      }, refreshInterval);
+      }, refreshIntervalRef.current);
     }
 
     return () => {
       if (intervalId) clearInterval(intervalId);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [autoRefresh, refreshInterval, fetchStats]);
+  }, [autoRefresh, fetchStats]);
 
   if (loading) return <CardSkeleton />;
 
@@ -424,6 +456,7 @@ export default function UsageStats() {
           {/* View Toggle */}
           <div className="flex items-center gap-1 bg-bg-subtle rounded-lg p-1 border border-border">
             <button
+              type="button"
               onClick={() => setViewMode("tokens")}
               className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                 viewMode === "tokens"
@@ -434,6 +467,7 @@ export default function UsageStats() {
               Tokens
             </button>
             <button
+              type="button"
               onClick={() => setViewMode("costs")}
               className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                 viewMode === "costs"
@@ -447,7 +481,7 @@ export default function UsageStats() {
 
           {/* Auto Refresh Toggle */}
           <div className="text-sm font-medium text-text-muted flex items-center gap-2">
-            <span>Auto Refresh ({refreshInterval / 1000}s)</span>
+            <span>Auto Refresh ({displayRefreshInterval / 1000}s)</span>
             <button
               type="button"
               onClick={() => setAutoRefresh(!autoRefresh)}

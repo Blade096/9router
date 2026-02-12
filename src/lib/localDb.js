@@ -54,7 +54,9 @@ const defaultData = {
     observabilityMaxRecords: 1000,
     observabilityBatchSize: 20,
     observabilityFlushIntervalMs: 5000,
-    observabilityMaxJsonSize: 1024
+    observabilityMaxJsonSize: 1024,
+    usageRefreshInterval: 5000,
+    usageAdaptiveRefresh: true
   },
   pricing: {} // NEW: pricing configuration
 };
