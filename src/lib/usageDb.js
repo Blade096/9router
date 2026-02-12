@@ -136,10 +136,16 @@ function initUsageDb(db) {
 
   // Migration: Add request_id column if it doesn't exist
   try {
-    db.prepare("ALTER TABLE usage_history ADD COLUMN request_id TEXT").run();
-    console.log("[usageDb] Added request_id column to usage_history");
+    // Check if column exists first
+    const tableInfo = db.prepare("PRAGMA table_info(usage_history)").all();
+    const hasRequestIdColumn = tableInfo.some(col => col.name === 'request_id');
+    
+    if (!hasRequestIdColumn) {
+      db.prepare("ALTER TABLE usage_history ADD COLUMN request_id TEXT").run();
+      console.log("[usageDb] Added request_id column to usage_history");
+    }
   } catch (e) {
-    // Column already exists, ignore error
+    console.error("[usageDb] Failed to add request_id column:", e.message);
   }
 }
 
