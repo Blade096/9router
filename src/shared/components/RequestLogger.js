@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Card from "./Card";
 
 export default function RequestLogger() {
@@ -8,9 +8,31 @@ export default function RequestLogger() {
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  const fetchLogs = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
+    try {
+      const res = await fetch("/api/usage/request-logs");
+      if (res.ok) {
+        const data = await res.json();
+        console.log("[RequestLogger] Received logs:", data.length, "items");
+        if (data.length > 0) {
+          console.log("[RequestLogger] First log:", data[0]);
+          console.log("[RequestLogger] Last log:", data[data.length - 1]);
+        }
+        setLogs(data);
+      } else {
+        console.error("[RequestLogger] API response not OK:", res.status);
+      }
+    } catch (error) {
+      console.error("Failed to fetch logs:", error);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchLogs();
-  }, []);
+  }, [fetchLogs]);
 
   useEffect(() => {
     let interval;
@@ -20,21 +42,10 @@ export default function RequestLogger() {
       }, 3000);
     }
     return () => clearInterval(interval);
-  }, [autoRefresh]);
+  }, [autoRefresh, fetchLogs]);
 
-  const fetchLogs = async (showLoading = true) => {
-    if (showLoading) setLoading(true);
-    try {
-      const res = await fetch("/api/usage/request-logs");
-      if (res.ok) {
-        const data = await res.json();
-        setLogs(data);
-      }
-    } catch (error) {
-      console.error("Failed to fetch logs:", error);
-    } finally {
-      if (showLoading) setLoading(false);
-    }
+  const toggleAutoRefresh = () => {
+    setAutoRefresh(!autoRefresh);
   };
 
   return (
@@ -42,19 +53,25 @@ export default function RequestLogger() {
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Request Logs</h2>
         <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-text-muted flex items-center gap-2 cursor-pointer">
-            <span>Auto Refresh (3s)</span>
-            <div
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${autoRefresh ? "bg-primary" : "bg-bg-subtle border border-border"
+          <span className="text-sm font-medium text-text-muted">Auto Refresh (3s)</span>
+          <button
+            type="button"
+            onClick={toggleAutoRefresh}
+            onKeyUp={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                toggleAutoRefresh();
+              }
+            }}
+            aria-pressed={autoRefresh}
+            aria-label="Toggle auto refresh"
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 cursor-pointer ${autoRefresh ? "bg-primary" : "bg-bg-subtle border border-border"
+              }`}
+          >
+            <span
+              className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${autoRefresh ? "translate-x-5" : "translate-x-1"
                 }`}
-            >
-              <span
-                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${autoRefresh ? "translate-x-5" : "translate-x-1"
-                  }`}
-              />
-            </div>
-          </label>
+            />
+          </button>
         </div>
       </div>
 
@@ -88,7 +105,7 @@ export default function RequestLogger() {
                   const isSuccess = status.includes("OK");
 
                   return (
-                    <tr key={i} className={`hover:bg-primary/5 transition-colors ${isPending ? 'bg-primary/5' : ''}`}>
+                    <tr key={`log-${i}-${Date.now()}-${log.slice(0, 20)}`} className={`hover:bg-primary/5 transition-colors ${isPending ? 'bg-primary/5' : ''}`}>
                       <td className="px-3 py-1.5 border-r border-border text-text-muted">{parts[0]}</td>
                       <td className="px-3 py-1.5 border-r border-border font-medium">{parts[1]}</td>
                       <td className="px-3 py-1.5 border-r border-border">
