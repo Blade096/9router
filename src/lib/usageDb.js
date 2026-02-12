@@ -146,10 +146,8 @@ async function flushToDatabase() {
     const itemsToSave = [...writeBuffer];
     writeBuffer = [];
 
-    const db = await getUsageDb();
-
     // Check if database connection is open, reinitialize if needed
-    if (!db.open && dbInstance) {
+    if (dbInstance && !dbInstance.open) {
       try {
         dbInstance = new Database(DB_FILE);
         dbInstance.pragma('journal_mode = WAL');
@@ -162,6 +160,14 @@ async function flushToDatabase() {
         console.error("[usageDb] Failed to reopen database:", reinitError.message);
         return;
       }
+    }
+
+    const db = dbInstance || await getUsageDb();
+
+    // Double-check connection is still open before using
+    if (!db.open) {
+      console.error("[usageDb] Database connection is not open, skipping flush");
+      return;
     }
 
     const stmt = db.prepare(`
@@ -788,10 +794,8 @@ export async function getRecentLogs(limit = 200) {
 
   // First try SQLite database (new format)
   try {
-    const db = await getUsageDb();
-
     // Check if database connection is open, reinitialize if needed
-    if (!db.open && dbInstance) {
+    if (dbInstance && !dbInstance.open) {
       try {
         dbInstance = new Database(DB_FILE);
         dbInstance.pragma('journal_mode = WAL');
@@ -802,7 +806,15 @@ export async function getRecentLogs(limit = 200) {
         console.log("[usageDb] Database connection reopened in getRecentLogs");
       } catch (reinitError) {
         console.error("[usageDb] Failed to reopen database:", reinitError.message);
+        return [];
       }
+    }
+
+    const db = dbInstance || await getUsageDb();
+
+    if (!db.open) {
+      console.error("[usageDb] Database connection is not open");
+      return [];
     }
 
     const rows = db.prepare(`
