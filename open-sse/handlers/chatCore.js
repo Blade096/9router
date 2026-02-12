@@ -10,7 +10,7 @@ import { getModelTargetFormat, PROVIDER_ID_TO_ALIAS } from "../config/providerMo
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
 import { HTTP_STATUS } from "../config/constants.js";
 import { handleBypassRequest } from "../utils/bypassHandler.js";
-import { saveRequestUsage, trackPendingRequest, saveRequestDetail } from "@/lib/usageDb.js";
+import { saveRequestUsage, trackPendingRequest, saveRequestDetail, generateRequestId } from "@/lib/usageDb.js";
 import { getExecutor } from "../executors/index.js";
 
 /**
@@ -399,8 +399,23 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Get executor for this provider
   const executor = getExecutor(provider);
 
+  // Generate request ID for tracking pending/completion lifecycle
+  const requestId = generateRequestId();
+
   // Track pending request
   trackPendingRequest(model, provider, connectionId, true);
+
+  // Record pending status in database
+  saveRequestUsage({
+    provider: provider || "unknown",
+    model: model || "unknown",
+    tokens: { prompt_tokens: 0, completion_tokens: 0 },
+    timestamp: new Date().toISOString(),
+    status: "pending",
+    connectionId: connectionId || undefined,
+    apiKey: apiKey || undefined,
+    requestId
+  }).catch(() => {});
 
   const msgCount = translatedBody.messages?.length
     || translatedBody.contents?.length
@@ -437,6 +452,18 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   } catch (error) {
     trackPendingRequest(model, provider, connectionId, false);
+
+    // Record error status in database
+    saveRequestUsage({
+      provider: provider || "unknown",
+      model: model || "unknown",
+      tokens: { prompt_tokens: 0, completion_tokens: 0 },
+      timestamp: new Date().toISOString(),
+      status: "error",
+      connectionId: connectionId || undefined,
+      apiKey: apiKey || undefined,
+      requestId
+    }).catch(() => {});
 
     const errorDetail = {
       provider: provider || "unknown",
@@ -583,7 +610,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
         timestamp: new Date().toISOString(),
         status: "success",
         connectionId: connectionId || undefined,
-        apiKey: apiKey || undefined
+        apiKey: apiKey || undefined,
+        requestId
       }).catch(err => {
         console.error("Failed to save usage stats:", err.message);
       });
@@ -702,7 +730,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
         timestamp: new Date().toISOString(),
         status: "success",
         connectionId: connectionId || undefined,
-        apiKey: apiKey || undefined
+        apiKey: apiKey || undefined,
+        requestId
       }).catch(err => {
         console.error("Failed to save streaming usage stats:", err.message);
       });
