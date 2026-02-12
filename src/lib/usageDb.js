@@ -134,18 +134,34 @@ function initUsageDb(db) {
     console.warn("[usageDb] Schema file not found:", schemaPath);
   }
 
-  // Migration: Add request_id column if it doesn't exist
+  // Migration: Add request_id column for databases created before this column was added
   try {
-    // Check if column exists first
     const tableInfo = db.prepare("PRAGMA table_info(usage_history)").all();
     const hasRequestIdColumn = tableInfo.some(col => col.name === 'request_id');
-    
+
     if (!hasRequestIdColumn) {
+      console.log("[usageDb] Running migration: adding request_id column to usage_history");
       db.prepare("ALTER TABLE usage_history ADD COLUMN request_id TEXT").run();
-      console.log("[usageDb] Added request_id column to usage_history");
+      db.prepare("CREATE INDEX IF NOT EXISTS idx_request_id ON usage_history(request_id)").run();
+
+      const updatedInfo = db.prepare("PRAGMA table_info(usage_history)").all();
+      const verified = updatedInfo.some(col => col.name === 'request_id');
+      if (verified) {
+        console.log("[usageDb] Migration completed: request_id column added successfully");
+      } else {
+        throw new Error("Migration verification failed: request_id column not found after ALTER TABLE");
+      }
     }
   } catch (e) {
-    console.error("[usageDb] Failed to add request_id column:", e.message);
+    console.error("[usageDb] Migration failed:", e.message);
+    throw new Error(
+      `Database migration failed: ${e.message}\n\n` +
+      `To recover:\n` +
+      `  1) Backup your data at: ${DB_FILE}\n` +
+      `  2) Delete the file to start fresh, or\n` +
+      `  3) Manually add 'request_id TEXT' column to usage_history table\n\n` +
+      `Original error: ${e.stack || e.message}`
+    );
   }
 }
 
