@@ -49,6 +49,51 @@ if (!isCloud && fs && typeof fs.existsSync === "function") {
 let dbInstance = null;
 let shutdownHandlerRegistered = false;
 
+// ============================================================================
+// CONFIGURATION: Batch Processing Settings
+// ============================================================================
+
+/**
+ * Batch size for buffer flush operations.
+ * @type {number}
+ */
+const BATCH_SIZE = 20;
+
+/**
+ * Time interval in milliseconds for auto-flush.
+ * @type {number}
+ */
+const FLUSH_INTERVAL = 5000;
+
+// ============================================================================
+// BATCH WRITE QUEUE
+// ============================================================================
+
+/**
+ * In-memory buffer for batch writes.
+ * Accumulates usage entries before flushing to database in a transaction.
+ * @type {Array<object>}
+ */
+let writeBuffer = [];
+
+/**
+ * Timer reference for auto-flush mechanism.
+ * Ensures data is written even during low traffic periods.
+ * @type {NodeJS.Timeout|null}
+ */
+let flushTimer = null;
+
+/**
+ * Flag indicating if a flush operation is currently in progress.
+ * Prevents concurrent flushes.
+ * @type {boolean}
+ */
+let isFlushing = false;
+
+// ============================================================================
+// PENDING REQUESTS TRACKING
+// ============================================================================
+
 const pendingRequests = {
   byModel: {},
   byAccount: {}
@@ -81,10 +126,81 @@ function initUsageDb(db) {
   }
 }
 
+/**
+ * Flush all buffered items to database in a single transaction.
+ * This function is called automatically when:
+ * 1. Buffer size reaches BATCH_SIZE
+ * 2. FLUSH_INTERVAL milliseconds elapses
+ * 3. Process is shutting down (graceful shutdown)
+ *
+ * @private
+ */
+async function flushToDatabase() {
+  if (isCloud || isFlushing || writeBuffer.length === 0) {
+    return;
+  }
+
+  isFlushing = true;
+
+  try {
+    const itemsToSave = [...writeBuffer];
+    writeBuffer = [];
+
+    const db = await getUsageDb();
+
+    const stmt = db.prepare(`
+      INSERT INTO usage_history
+      (provider, model, connection_id, api_key, timestamp, status,
+       prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens,
+       cache_creation_input_tokens, cache_read_input_tokens)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const transaction = db.transaction((items) => {
+      for (const item of items) {
+        stmt.run(
+          item.provider,
+          item.model,
+          item.connectionId || null,
+          item.apiKey || null,
+          new Date(item.timestamp).getTime(),
+          item.status,
+          item.tokens?.prompt_tokens || 0,
+          item.tokens?.completion_tokens || 0,
+          item.tokens?.cached_tokens || 0,
+          item.tokens?.reasoning_tokens || 0,
+          item.tokens?.cache_creation_input_tokens || 0,
+          item.tokens?.cache_read_input_tokens || 0
+        );
+      }
+    });
+
+    transaction(itemsToSave);
+  } catch (error) {
+    console.error("[usageDb] Batch write failed:", error);
+  } finally {
+    isFlushing = false;
+  }
+}
+
+/**
+ * Register process shutdown handlers to flush remaining data before exit.
+ * Should be called once when the module initializes.
+ */
 function ensureShutdownHandler() {
   if (shutdownHandlerRegistered || isCloud) return;
 
-  const handler = () => {
+  const handler = async () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+
+    if (writeBuffer.length > 0) {
+      console.log(`[usageDb] Flushing ${writeBuffer.length} items before shutdown...`);
+      await flushToDatabase();
+    }
+
     if (dbInstance) {
       dbInstance.close();
       console.log("[usageDb] Database closed");
@@ -144,7 +260,21 @@ export async function getUsageDb() {
 export async function saveRequestUsage(entry) {
   if (isCloud) return;
 
-  console.log("[usageDb] saveRequestUsage - SQLite implementation pending");
+  writeBuffer.push(entry);
+
+  if (writeBuffer.length >= BATCH_SIZE) {
+    await flushToDatabase();
+
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  } else if (!flushTimer) {
+    flushTimer = setTimeout(() => {
+      flushToDatabase().catch(() => {});
+      flushTimer = null;
+    }, FLUSH_INTERVAL);
+  }
 }
 
 export async function getUsageStats() {
