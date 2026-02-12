@@ -538,6 +538,19 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Check provider response - return error info for fallback handling
   if (!providerResponse.ok) {
     trackPendingRequest(model, provider, connectionId, false);
+
+    // Record error status in database
+    saveRequestUsage({
+      provider: provider || "unknown",
+      model: model || "unknown",
+      tokens: { prompt_tokens: 0, completion_tokens: 0 },
+      timestamp: new Date().toISOString(),
+      status: "error",
+      connectionId: connectionId || undefined,
+      apiKey: apiKey || undefined,
+      requestId
+    }).catch(() => {});
+
     const { statusCode, message, retryAfterMs } = await parseUpstreamError(providerResponse, provider);
 
     const errorDetail = {

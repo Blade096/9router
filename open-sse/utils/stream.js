@@ -249,7 +249,7 @@ export function createSSEStream(options = {}) {
           }
 
           if (hasValidUsage(usage)) {
-            logUsage(provider, usage, model, connectionId, apiKey);
+            logUsage(provider, usage, model, connectionId, apiKey, requestId);
           }
           
           if (onStreamComplete) {
@@ -309,7 +309,7 @@ export function createSSEStream(options = {}) {
         }
 
         if (hasValidUsage(state?.usage)) {
-          logUsage(state.provider || targetFormat, state.usage, model, connectionId, apiKey);
+          logUsage(state.provider || targetFormat, state.usage, model, connectionId, apiKey, requestId);
         }
         
         if (onStreamComplete) {
