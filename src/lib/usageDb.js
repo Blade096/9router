@@ -4,28 +4,7 @@ import os from "os";
 import fs from "fs";
 import { fileURLToPath } from "url";
 
-// Import LowDB functions for dual-write mode
-import {
-  saveRequestUsage as saveRequestUsageLowDB,
-  getUsageStats as getUsageStatsLowDB,
-  getUsageHistory as getUsageHistoryLowDB,
-  appendRequestLog as appendRequestLogLowDB,
-  getRecentLogs as getRecentLogsLowDB
-} from "./usageDb.lowdb.js";
-
 const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
-
-// ============================================================================
-// DUAL-WRITE CONFIGURATION
-// ============================================================================
-
-/**
- * Controls whether to read from SQLite or fall back to LowDB.
- * Default: true (read from SQLite, write to both)
- * Set USE_SQLITE_USAGE=false to read from LowDB
- * @type {boolean}
- */
-const USE_SQLITE_READ = process.env.USE_SQLITE_USAGE !== 'false';
 
 function getAppName() {
   return "9router";
@@ -281,7 +260,6 @@ export async function getUsageDb() {
 export async function saveRequestUsage(entry) {
   if (isCloud) return;
 
-  // 1. Write to SQLite (batched write)
   try {
     writeBuffer.push(entry);
 
@@ -300,13 +278,6 @@ export async function saveRequestUsage(entry) {
     }
   } catch (error) {
     console.error("[usageDb] SQLite write failed:", error.message);
-  }
-
-  // 2. Write to LowDB (immediate write for fallback)
-  try {
-    await saveRequestUsageLowDB(entry);
-  } catch (error) {
-    console.error("[usageDb] LowDB write failed:", error.message);
   }
 }
 
@@ -791,18 +762,27 @@ function formatLogDate(date = new Date()) {
 }
 
 export async function appendRequestLog({ model, provider, connectionId, tokens, status }) {
+  if (isCloud || !LOG_FILE) return;
+
   try {
-    await appendRequestLogLowDB({ model, provider, connectionId, tokens, status });
+    const logEntry = `[${formatLogDate()}] ${provider}/${model} | tokens: ${tokens?.prompt_tokens || 0}+${tokens?.completion_tokens || 0} | status: ${status}`;
+    fs.appendFileSync(LOG_FILE, logEntry + "\n");
   } catch (error) {
-    console.error("[usageDb] LowDB appendRequestLog failed:", error.message);
+    console.error("[usageDb] Failed to append request log:", error.message);
   }
 }
 
 export async function getRecentLogs(limit = 200) {
+  if (isCloud || !LOG_FILE) return [];
+
   try {
-    return await getRecentLogsLowDB(limit);
+    if (!fs.existsSync(LOG_FILE)) return [];
+
+    const content = fs.readFileSync(LOG_FILE, "utf-8");
+    const lines = content.split("\n").filter(line => line.trim());
+    return lines.slice(-limit);
   } catch (error) {
-    console.error("[usageDb] LowDB getRecentLogs failed:", error.message);
+    console.error("[usageDb] Failed to read recent logs:", error.message);
     return [];
   }
 }
