@@ -97,36 +97,43 @@ export default function RequestLogger() {
                <tbody className="divide-y divide-border/50">
                  {logs.map((log, i) => {
                    const timestamp = new Date(log.timestamp).toLocaleString();
-                   const model = log.model;
-                   const provider = log.provider;
-                   const account = log.connectionId ? log.connectionId.slice(0, 8) + "..." : "-";
-                   const inTokens = log.tokens?.prompt || 0;
-                   const outTokens = log.tokens?.completion || 0;
-                   const status = log.status;
+                    const model = log.model;
+                    const provider = log.provider;
+                    const account = log.connectionId ? log.connectionId.slice(0, 8) + "..." : "-";
+                    const inTokens = log.tokens?.prompt || 0;
+                    const outTokens = log.tokens?.completion || 0;
+                    const status = log.status;
 
-                   if (!status) return null;
+                    if (!status) return null;
 
-                   const isPending = status.includes("PENDING");
-                   const isFailed = status.includes("FAILED");
-                   const isSuccess = status.includes("OK");
+                    const isPending = status === "pending" || status.includes("PENDING");
+                    const isFailed = status === "error" || status.includes("FAILED") || status.includes("ERROR");
+                    const isSuccess = status === "success" || status.includes("OK") || status === "200 OK";
 
-                   return (
-                     <tr key={`log-${i}-${Date.now()}-${log.timestamp}`} className={`hover:bg-primary/5 transition-colors ${isPending ? 'bg-primary/5' : ''}`}>
-                       <td className="px-3 py-1.5 border-r border-border text-text-muted">{timestamp}</td>
-                       <td className="px-3 py-1.5 border-r border-border font-medium">{model || "-"}</td>
-                       <td className="px-3 py-1.5 border-r border-border">
-                         <span className="px-1.5 py-0.5 rounded bg-bg-subtle border border-border text-[10px] uppercase font-bold">
-                           {provider || "-"}
-                         </span>
-                       </td>
-                       <td className="px-3 py-1.5 border-r border-border truncate max-w-[150px]" title={account}>{account}</td>
-                       <td className="px-3 py-1.5 border-r border-border text-right text-primary">{inTokens}</td>
-                       <td className="px-3 py-1.5 border-r border-border text-right text-success">{outTokens}</td>
-                       <td className={`px-3 py-1.5 font-bold ${isSuccess ? 'text-success' : isFailed ? 'text-error' : 'text-primary animate-pulse'}`}>
-                         {status}
-                       </td>
-                     </tr>
-                   );
+                    const statusDisplay = isPending ? "PENDING" : isSuccess ? "SUCCESS" : isFailed ? "ERROR" : status;
+                    
+                    let statusColor = "text-primary";
+                    if (isPending) statusColor = "text-yellow-500 animate-pulse";
+                    else if (isSuccess) statusColor = "text-green-500";
+                    else if (isFailed) statusColor = "text-red-500";
+
+                    return (
+                      <tr key={`log-${i}-${Date.now()}-${log.timestamp}`} className={`hover:bg-primary/5 transition-colors ${isPending ? 'bg-yellow-500/10' : ''}`}>
+                        <td className="px-3 py-1.5 border-r border-border text-text-muted">{timestamp}</td>
+                        <td className="px-3 py-1.5 border-r border-border font-medium">{model || "-"}</td>
+                        <td className="px-3 py-1.5 border-r border-border">
+                          <span className="px-1.5 py-0.5 rounded bg-bg-subtle border border-border text-[10px] uppercase font-bold">
+                            {provider || "-"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5 border-r border-border truncate max-w-[150px]" title={account}>{account}</td>
+                        <td className="px-3 py-1.5 border-r border-border text-right text-primary">{inTokens}</td>
+                        <td className="px-3 py-1.5 border-r border-border text-right text-success">{outTokens}</td>
+                        <td className={`px-3 py-1.5 font-bold ${statusColor}`}>
+                          {statusDisplay}
+                        </td>
+                      </tr>
+                    );
                  })}
               </tbody>
             </table>

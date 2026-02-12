@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS usage_history (
   cached_tokens INTEGER DEFAULT 0,
   reasoning_tokens INTEGER DEFAULT 0,
   cache_creation_input_tokens INTEGER DEFAULT 0,
-  cache_read_input_tokens INTEGER DEFAULT 0
+  cache_read_input_tokens INTEGER DEFAULT 0,
+  request_id TEXT
 );
 
 -- Indexes for common queries
@@ -37,6 +38,9 @@ CREATE INDEX IF NOT EXISTS idx_connection
 
 CREATE INDEX IF NOT EXISTS idx_status
   ON usage_history(status);
+
+CREATE INDEX IF NOT EXISTS idx_request_id
+  ON usage_history(request_id);
 
 CREATE INDEX IF NOT EXISTS idx_provider_timestamp
   ON usage_history(provider, timestamp DESC);

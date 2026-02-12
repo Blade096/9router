@@ -100,6 +100,15 @@ const pendingRequests = {
   byAccount: {}
 };
 
+/**
+ * Generate a unique request ID combining timestamp and random string.
+ * Format: ${Date.now()}-${random}
+ * @returns {string} Unique request ID
+ */
+export function generateRequestId() {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
 export function trackPendingRequest(model, provider, connectionId, started) {
   const modelKey = provider ? `${model} (${provider})` : model;
 
@@ -125,6 +134,14 @@ function initUsageDb(db) {
   } else {
     console.warn("[usageDb] Schema file not found:", schemaPath);
   }
+
+  // Migration: Add request_id column if it doesn't exist
+  try {
+    db.prepare("ALTER TABLE usage_history ADD COLUMN request_id TEXT").run();
+    console.log("[usageDb] Added request_id column to usage_history");
+  } catch (e) {
+    // Column already exists, ignore error
+  }
 }
 
 /**
@@ -147,10 +164,8 @@ async function flushToDatabase() {
     const itemsToSave = [...writeBuffer];
     writeBuffer = [];
 
-    const db = await getUsageDb();
-
     // Check if database connection is open, reinitialize if needed
-    if (!db.open && dbInstance) {
+    if (dbInstance && !dbInstance.open) {
       try {
         dbInstance = new Database(DB_FILE);
         dbInstance.pragma('journal_mode = WAL');
@@ -165,12 +180,20 @@ async function flushToDatabase() {
       }
     }
 
+    const db = dbInstance || await getUsageDb();
+
+    // Double-check connection is still open before using
+    if (!db.open) {
+      console.error("[usageDb] Database connection is not open, skipping flush");
+      return;
+    }
+
     const stmt = db.prepare(`
       INSERT INTO usage_history
       (provider, model, connection_id, api_key, timestamp, status,
        prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens,
-       cache_creation_input_tokens, cache_read_input_tokens)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       cache_creation_input_tokens, cache_read_input_tokens, request_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const transaction = db.transaction((items) => {
@@ -199,7 +222,8 @@ async function flushToDatabase() {
           item.tokens?.cached_tokens || 0,
           item.tokens?.reasoning_tokens || 0,
           item.tokens?.cache_creation_input_tokens || 0,
-          item.tokens?.cache_read_input_tokens || 0
+          item.tokens?.cache_read_input_tokens || 0,
+          item.requestId || null
         );
       }
     });
@@ -801,10 +825,8 @@ export async function getRecentLogs(limit = 200) {
 
   // First try SQLite database (new format)
   try {
-    const db = await getUsageDb();
-
     // Check if database connection is open, reinitialize if needed
-    if (!db.open && dbInstance) {
+    if (dbInstance && !dbInstance.open) {
       try {
         dbInstance = new Database(DB_FILE);
         dbInstance.pragma('journal_mode = WAL');
@@ -815,7 +837,15 @@ export async function getRecentLogs(limit = 200) {
         console.log("[usageDb] Database connection reopened in getRecentLogs");
       } catch (reinitError) {
         console.error("[usageDb] Failed to reopen database:", reinitError.message);
+        return [];
       }
+    }
+
+    const db = dbInstance || await getUsageDb();
+
+    if (!db.open) {
+      console.error("[usageDb] Database connection is not open");
+      return [];
     }
 
     const rows = db.prepare(`
@@ -831,7 +861,8 @@ export async function getRecentLogs(limit = 200) {
         cached_tokens,
         reasoning_tokens,
         cache_creation_input_tokens,
-        cache_read_input_tokens
+        cache_read_input_tokens,
+        request_id
       FROM usage_history
       ORDER BY timestamp DESC
       LIMIT ?
@@ -845,6 +876,7 @@ export async function getRecentLogs(limit = 200) {
       connectionId: row.connection_id,
       apiKey: row.api_key,
       status: row.status,
+      requestId: row.request_id,
       tokens: {
         prompt: row.prompt_tokens,
         completion: row.completion_tokens,
