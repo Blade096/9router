@@ -1,10 +1,10 @@
 import { Low } from "lowdb";
-import { JSONFile } from "lowdb/node";
 import { EventEmitter } from "events";
 import path from "path";
 import os from "os";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { WindowsSafeJSONFile, cleanupLegacyTempFile } from "@/lib/windowsSafeJsonFile";
 
 const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
 
@@ -195,7 +195,8 @@ export async function getUsageDb() {
   }
 
   if (!dbInstance) {
-    const adapter = new JSONFile(DB_FILE);
+    cleanupLegacyTempFile(DB_FILE);
+    const adapter = new WindowsSafeJSONFile(DB_FILE);
     dbInstance = new Low(adapter, defaultData);
 
     // Try to read DB with error recovery for corrupt JSON

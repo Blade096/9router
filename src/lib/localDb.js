@@ -1,9 +1,9 @@
 import { Low } from "lowdb";
-import { JSONFile } from "lowdb/node";
 import { v4 as uuidv4 } from "uuid";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { WindowsSafeJSONFile, cleanupLegacyTempFile } from "@/lib/windowsSafeJsonFile";
 
 const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
 
@@ -152,7 +152,8 @@ export async function getDb() {
   }
 
   if (!dbInstance) {
-    const adapter = new JSONFile(DB_FILE);
+    cleanupLegacyTempFile(DB_FILE);
+    const adapter = new WindowsSafeJSONFile(DB_FILE);
     dbInstance = new Low(adapter, cloneDefaultData());
   }
 
