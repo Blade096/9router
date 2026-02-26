@@ -33,6 +33,8 @@ function getUserDataDir() {
 // Data file path - stored in user home directory
 const DATA_DIR = getUserDataDir();
 const DB_FILE = isCloud ? null : path.join(DATA_DIR, "db.json");
+const DB_TMP_FILE = isCloud ? null : path.join(DATA_DIR, ".db.json.tmp");
+const DB_BACKUP_FILE = isCloud ? null : path.join(DATA_DIR, "db.json.bak");
 
 // Ensure data directory exists
 if (!isCloud && !fs.existsSync(DATA_DIR)) {
@@ -134,6 +136,51 @@ function ensureDbShape(data) {
   return { data: next, changed };
 }
 
+function readJsonObjectFromFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    if (!raw || !raw.trim()) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function recoverDbDataFromFallbackFiles() {
+  const candidates = [DB_TMP_FILE, DB_BACKUP_FILE];
+  for (const filePath of candidates) {
+    const parsed = readJsonObjectFromFile(filePath);
+    if (parsed) {
+      console.warn(`[DB] Recovered database from fallback file: ${filePath}`);
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function backupCorruptDbFile() {
+  if (!DB_FILE || !fs.existsSync(DB_FILE)) return null;
+  try {
+    const backupPath = path.join(DATA_DIR, `db.json.corrupt.${Date.now()}.json`);
+    fs.copyFileSync(DB_FILE, backupPath);
+    return backupPath;
+  } catch {
+    return null;
+  }
+}
+
+function backupCurrentDbSnapshot() {
+  if (!DB_FILE || !DB_BACKUP_FILE || !fs.existsSync(DB_FILE)) return;
+  try {
+    fs.copyFileSync(DB_FILE, DB_BACKUP_FILE);
+  } catch {
+    // Best-effort backup only; do not fail request for backup errors.
+  }
+}
+
 // Share singleton and write queue across route bundles in the same process.
 const LOCAL_DB_INSTANCE_KEY = "__nineRouterLocalDbInstance";
 const LOCAL_DB_WRITE_QUEUE_KEY = "__nineRouterLocalDbWriteQueue";
@@ -173,6 +220,7 @@ async function writeDbWithRetry(db) {
   for (let attempt = 1; attempt <= MAX_DB_WRITE_RETRIES; attempt++) {
     try {
       await db.write();
+      backupCurrentDbSnapshot();
       return;
     } catch (error) {
       if (!isTransientDbWriteError(error) || attempt === MAX_DB_WRITE_RETRIES) {
@@ -221,8 +269,17 @@ export async function getDb() {
     await dbInstance.read();
   } catch (error) {
     if (error instanceof SyntaxError) {
-      console.warn('[DB] Corrupt JSON detected, resetting to defaults...');
-      dbInstance.data = cloneDefaultData();
+      const recovered = recoverDbDataFromFallbackFiles();
+      if (recovered) {
+        const { data } = ensureDbShape(recovered);
+        dbInstance.data = data;
+      } else {
+        const corruptBackup = backupCorruptDbFile();
+        console.warn(
+          `[DB] Corrupt JSON detected. Backed up corrupt file${corruptBackup ? ` to ${corruptBackup}` : ""}, then reset to defaults.`
+        );
+        dbInstance.data = cloneDefaultData();
+      }
       await writeDbSafe(dbInstance);
     } else {
       throw error;
@@ -231,7 +288,13 @@ export async function getDb() {
 
   // Initialize/migrate missing keys for older DB schema versions.
   if (!dbInstance.data) {
-    dbInstance.data = cloneDefaultData();
+    const recovered = recoverDbDataFromFallbackFiles();
+    if (recovered) {
+      const { data } = ensureDbShape(recovered);
+      dbInstance.data = data;
+    } else {
+      dbInstance.data = cloneDefaultData();
+    }
     await writeDbSafe(dbInstance);
   } else {
     const { data, changed } = ensureDbShape(dbInstance.data);
