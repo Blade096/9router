@@ -5,6 +5,7 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { withLock } from "./utils/fileLock.js";
 
 const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
 
@@ -197,6 +198,12 @@ export async function getUsageDb() {
   if (!dbInstance) {
     const adapter = new JSONFile(DB_FILE);
     dbInstance = new Low(adapter, defaultData);
+    
+    // Wrap write method with file lock to prevent Windows EPERM errors
+    const originalWrite = dbInstance.write.bind(dbInstance);
+    dbInstance.write = async () => {
+      return withLock(DB_FILE, originalWrite);
+    };
 
     // Try to read DB with error recovery for corrupt JSON
     try {

@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { withLock } from "./utils/fileLock.js";
 
 const isCloud = typeof caches !== 'undefined' || typeof caches === 'object';
 
@@ -154,6 +155,12 @@ export async function getDb() {
   if (!dbInstance) {
     const adapter = new JSONFile(DB_FILE);
     dbInstance = new Low(adapter, cloneDefaultData());
+    
+    // Wrap write method with file lock to prevent Windows EPERM errors
+    const originalWrite = dbInstance.write.bind(dbInstance);
+    dbInstance.write = async () => {
+      return withLock(DB_FILE, originalWrite);
+    };
   }
 
   // Always read latest disk state to avoid stale singleton data across route workers.
