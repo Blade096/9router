@@ -1,12 +1,28 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
   images: {
     unoptimized: true
   },
   env: {},
+
+  // 添加空配置以支持 Turbopack
+  turbopack: {},
+
+  // 核心：排除 tracing 中的受限 Windows 系统路径（避免 scandir 权限错误）
+  outputFileTracingExcludes: {
+    // '/*' 通配所有路由/页面，排除这些 glob 模式（从项目根相对路径）
+    '/*': [
+      '**/AppData/**',
+      '**/WindowsApps/**',
+      '**/Roaming/**',
+      '**/Local/**',
+      'C:\\Users\\admin\\AppData\\Local\\Microsoft\\WindowsApps\\**',  // 精确匹配这个错误路径
+      'C:\\Users\\admin\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\**',
+      '**\\程序\\**',  // 中文开始菜单
+    ],
+  },
+
   webpack: (config, { isServer }) => {
-    // Ignore fs/path modules in browser bundle
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -14,10 +30,20 @@ const nextConfig = {
         path: false,
       };
     }
-    // Stop watching logs directory to prevent HMR during streaming
-    config.watchOptions = { ...config.watchOptions, ignored: /[\\/](logs|\.next)[\\/]/ };
+
+    // watchOptions.ignored 必须是字符串 glob 数组（Webpack 不接受 RegExp）
+    config.watchOptions = {
+      ...config.watchOptions,
+      ignored: [
+        '**/logs/**',
+        '**/.next/**',
+        '**/node_modules/**',  // 额外安全
+      ],
+    };
+
     return config;
   },
+
   async rewrites() {
     return [
       {
