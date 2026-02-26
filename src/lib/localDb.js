@@ -134,18 +134,78 @@ function ensureDbShape(data) {
   return { data: next, changed };
 }
 
-// Singleton instance
-let dbInstance = null;
+// Share singleton and write queue across route bundles in the same process.
+const LOCAL_DB_INSTANCE_KEY = "__nineRouterLocalDbInstance";
+const LOCAL_DB_WRITE_QUEUE_KEY = "__nineRouterLocalDbWriteQueue";
+const TRANSIENT_DB_WRITE_ERRORS = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
+const MAX_DB_WRITE_RETRIES = 6;
+
+function getSharedDbInstance() {
+  return globalThis[LOCAL_DB_INSTANCE_KEY] || null;
+}
+
+function setSharedDbInstance(instance) {
+  globalThis[LOCAL_DB_INSTANCE_KEY] = instance;
+  return instance;
+}
+
+function getSharedWriteQueue() {
+  if (!globalThis[LOCAL_DB_WRITE_QUEUE_KEY]) {
+    globalThis[LOCAL_DB_WRITE_QUEUE_KEY] = Promise.resolve();
+  }
+  return globalThis[LOCAL_DB_WRITE_QUEUE_KEY];
+}
+
+function setSharedWriteQueue(queue) {
+  globalThis[LOCAL_DB_WRITE_QUEUE_KEY] = queue;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientDbWriteError(error) {
+  if (!error || typeof error !== "object") return false;
+  return TRANSIENT_DB_WRITE_ERRORS.has(error.code);
+}
+
+async function writeDbWithRetry(db) {
+  for (let attempt = 1; attempt <= MAX_DB_WRITE_RETRIES; attempt++) {
+    try {
+      await db.write();
+      return;
+    } catch (error) {
+      if (!isTransientDbWriteError(error) || attempt === MAX_DB_WRITE_RETRIES) {
+        throw error;
+      }
+      const backoffMs = Math.min(25 * (2 ** (attempt - 1)), 400);
+      const jitterMs = Math.floor(Math.random() * 20);
+      await sleep(backoffMs + jitterMs);
+    }
+  }
+}
+
+async function writeDbSafe(db) {
+  const previousQueue = getSharedWriteQueue();
+  const nextQueue = previousQueue.then(
+    () => writeDbWithRetry(db),
+    () => writeDbWithRetry(db)
+  );
+  setSharedWriteQueue(nextQueue.catch(() => {}));
+  return nextQueue;
+}
 
 /**
  * Get database instance (singleton)
  */
 export async function getDb() {
+  let dbInstance = getSharedDbInstance();
+
   if (isCloud) {
     // Return in-memory DB for Workers
     if (!dbInstance) {
       const data = cloneDefaultData();
-      dbInstance = new Low({ read: async () => {}, write: async () => {} }, data);
+      dbInstance = setSharedDbInstance(new Low({ read: async () => {}, write: async () => {} }, data));
       dbInstance.data = data;
     }
     return dbInstance;
@@ -153,7 +213,7 @@ export async function getDb() {
 
   if (!dbInstance) {
     const adapter = new JSONFile(DB_FILE);
-    dbInstance = new Low(adapter, cloneDefaultData());
+    dbInstance = setSharedDbInstance(new Low(adapter, cloneDefaultData()));
   }
 
   // Always read latest disk state to avoid stale singleton data across route workers.
@@ -163,7 +223,7 @@ export async function getDb() {
     if (error instanceof SyntaxError) {
       console.warn('[DB] Corrupt JSON detected, resetting to defaults...');
       dbInstance.data = cloneDefaultData();
-      await dbInstance.write();
+      await writeDbSafe(dbInstance);
     } else {
       throw error;
     }
@@ -172,12 +232,12 @@ export async function getDb() {
   // Initialize/migrate missing keys for older DB schema versions.
   if (!dbInstance.data) {
     dbInstance.data = cloneDefaultData();
-    await dbInstance.write();
+    await writeDbSafe(dbInstance);
   } else {
     const { data, changed } = ensureDbShape(dbInstance.data);
     dbInstance.data = data;
     if (changed) {
-      await dbInstance.write();
+      await writeDbSafe(dbInstance);
     }
   }
 
@@ -255,7 +315,7 @@ export async function createProviderNode(data) {
   };
 
   db.data.providerNodes.push(node);
-  await db.write();
+  await writeDbSafe(db);
 
   return node;
 }
@@ -279,7 +339,7 @@ export async function updateProviderNode(id, data) {
     updatedAt: new Date().toISOString(),
   };
 
-  await db.write();
+  await writeDbSafe(db);
 
   return db.data.providerNodes[index];
 }
@@ -298,7 +358,7 @@ export async function deleteProviderNode(id) {
   if (index === -1) return null;
 
   const [removed] = db.data.providerNodes.splice(index, 1);
-  await db.write();
+  await writeDbSafe(db);
 
   return removed;
 }
@@ -313,7 +373,7 @@ export async function deleteProviderConnectionsByProvider(providerId) {
     (connection) => connection.provider !== providerId
   );
   const deletedCount = beforeCount - db.data.providerConnections.length;
-  await db.write();
+  await writeDbSafe(db);
   return deletedCount;
 }
 
@@ -352,7 +412,7 @@ export async function createProviderConnection(data) {
       ...data,
       updatedAt: now,
     };
-    await db.write();
+    await writeDbSafe(db);
     return db.data.providerConnections[existingIndex];
   }
   
@@ -413,7 +473,7 @@ export async function createProviderConnection(data) {
   }
   
   db.data.providerConnections.push(connection);
-  await db.write();
+  await writeDbSafe(db);
 
   // Reorder to ensure consistency
   await reorderProviderConnections(data.provider);
@@ -438,7 +498,7 @@ export async function updateProviderConnection(id, data) {
     updatedAt: new Date().toISOString(),
   };
 
-  await db.write();
+  await writeDbSafe(db);
 
   // Reorder if priority was changed
   if (data.priority !== undefined) {
@@ -460,7 +520,7 @@ export async function deleteProviderConnection(id) {
   const providerId = db.data.providerConnections[index].provider;
 
   db.data.providerConnections.splice(index, 1);
-  await db.write();
+  await writeDbSafe(db);
 
   // Reorder to fill gaps
   await reorderProviderConnections(providerId);
@@ -490,7 +550,7 @@ export async function reorderProviderConnections(providerId) {
     conn.priority = index + 1;
   });
 
-  await db.write();
+  await writeDbSafe(db);
 }
 
 // ============ Model Aliases ============
@@ -509,7 +569,7 @@ export async function getModelAliases() {
 export async function setModelAlias(alias, model) {
   const db = await getDb();
   db.data.modelAliases[alias] = model;
-  await db.write();
+  await writeDbSafe(db);
 }
 
 /**
@@ -518,7 +578,7 @@ export async function setModelAlias(alias, model) {
 export async function deleteModelAlias(alias) {
   const db = await getDb();
   delete db.data.modelAliases[alias];
-  await db.write();
+  await writeDbSafe(db);
 }
 
 // ============ MITM Alias ============
@@ -534,7 +594,7 @@ export async function setMitmAliasAll(toolName, mappings) {
   const db = await getDb();
   if (!db.data.mitmAlias) db.data.mitmAlias = {};
   db.data.mitmAlias[toolName] = mappings || {};
-  await db.write();
+  await writeDbSafe(db);
 }
 
 // ============ Combos ============
@@ -580,7 +640,7 @@ export async function createCombo(data) {
   };
   
   db.data.combos.push(combo);
-  await db.write();
+  await writeDbSafe(db);
   return combo;
 }
 
@@ -600,7 +660,7 @@ export async function updateCombo(id, data) {
     updatedAt: new Date().toISOString(),
   };
   
-  await db.write();
+  await writeDbSafe(db);
   return db.data.combos[index];
 }
 
@@ -615,7 +675,7 @@ export async function deleteCombo(id) {
   if (index === -1) return false;
   
   db.data.combos.splice(index, 1);
-  await db.write();
+  await writeDbSafe(db);
   return true;
 }
 
@@ -668,7 +728,7 @@ export async function createApiKey(name, machineId) {
   };
   
   db.data.apiKeys.push(apiKey);
-  await db.write();
+  await writeDbSafe(db);
   
   return apiKey;
 }
@@ -683,7 +743,7 @@ export async function deleteApiKey(id) {
   if (index === -1) return false;
   
   db.data.apiKeys.splice(index, 1);
-  await db.write();
+  await writeDbSafe(db);
   
   return true;
 }
@@ -707,7 +767,7 @@ export async function updateApiKey(id, data) {
     ...db.data.apiKeys[index],
     ...data,
   };
-  await db.write();
+  await writeDbSafe(db);
   return db.data.apiKeys[index];
 }
 
@@ -751,7 +811,7 @@ export async function cleanupProviderConnections() {
   }
 
   if (cleaned > 0) {
-    await db.write();
+    await writeDbSafe(db);
   }
   return cleaned;
 }
@@ -775,7 +835,7 @@ export async function updateSettings(updates) {
     ...db.data.settings,
     ...updates
   };
-  await db.write();
+  await writeDbSafe(db);
   return db.data.settings;
 }
 
@@ -910,7 +970,7 @@ export async function updatePricing(pricingData) {
     }
   }
 
-  await db.write();
+  await writeDbSafe(db);
   return db.data.pricing;
 }
 
@@ -940,7 +1000,7 @@ export async function resetPricing(provider, model) {
     delete db.data.pricing[provider];
   }
 
-  await db.write();
+  await writeDbSafe(db);
   return db.data.pricing;
 }
 
@@ -950,6 +1010,6 @@ export async function resetPricing(provider, model) {
 export async function resetAllPricing() {
   const db = await getDb();
   db.data.pricing = {};
-  await db.write();
+  await writeDbSafe(db);
   return db.data.pricing;
 }
