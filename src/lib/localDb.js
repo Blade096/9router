@@ -35,6 +35,8 @@ const DB_FILE = isCloud ? null : path.join(DATA_DIR, "db.json");
 const DB_TMP_FILE = isCloud ? null : path.join(DATA_DIR, ".db.json.tmp");
 const DB_BACKUP_FILE = isCloud ? null : path.join(DATA_DIR, "db.json.bak");
 const DB_LOCK_FILE = isCloud ? null : path.join(DATA_DIR, "db.json.lock");
+const DB_EVENT_LOG_FILE = isCloud ? null : path.join(DATA_DIR, "db-events.log");
+const DB_EVENT_STATS_FILE = isCloud ? null : path.join(DATA_DIR, "db-events.stats.json");
 
 // Ensure data directory exists
 if (!isCloud && !fs.existsSync(DATA_DIR)) {
@@ -155,6 +157,7 @@ function recoverDbDataFromFallbackFiles() {
     const parsed = readJsonObjectFromFile(filePath);
     if (parsed) {
       console.warn(`[DB] Recovered database from fallback file: ${filePath}`);
+      recordDbEvent("DB_RECOVERED_FROM_FALLBACK", { sourceFile: path.basename(filePath) });
       return parsed;
     }
   }
@@ -179,6 +182,117 @@ function backupCurrentDbSnapshot() {
   } catch {
     // Best-effort backup only; do not fail request for backup errors.
   }
+}
+
+function createEmptyDbEventStats() {
+  return {
+    since: null,
+    total: 0,
+    byType: {},
+    byCode: {},
+    lastEvent: null,
+  };
+}
+
+function readDbEventStatsFile() {
+  if (!DB_EVENT_STATS_FILE || !fs.existsSync(DB_EVENT_STATS_FILE)) {
+    return createEmptyDbEventStats();
+  }
+
+  try {
+    const raw = fs.readFileSync(DB_EVENT_STATS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return createEmptyDbEventStats();
+    }
+    return {
+      since: parsed.since || null,
+      total: Number.isFinite(parsed.total) ? parsed.total : 0,
+      byType: parsed.byType && typeof parsed.byType === "object" ? parsed.byType : {},
+      byCode: parsed.byCode && typeof parsed.byCode === "object" ? parsed.byCode : {},
+      lastEvent: parsed.lastEvent && typeof parsed.lastEvent === "object" ? parsed.lastEvent : null,
+    };
+  } catch {
+    return createEmptyDbEventStats();
+  }
+}
+
+function persistDbEventStats(stats) {
+  if (!DB_EVENT_STATS_FILE) return;
+  try {
+    fs.writeFileSync(DB_EVENT_STATS_FILE, `${JSON.stringify(stats, null, 2)}\n`, "utf-8");
+  } catch {
+    // Best effort only; stats write failure should never affect business logic.
+  }
+}
+
+function recordDbEvent(type, details = {}, level = "warn") {
+  if (isCloud || !DB_EVENT_LOG_FILE) return;
+
+  const timestamp = new Date().toISOString();
+  const event = {
+    timestamp,
+    type,
+    level,
+    pid: process.pid,
+    ...details,
+  };
+
+  try {
+    fs.appendFileSync(DB_EVENT_LOG_FILE, `${JSON.stringify(event)}\n`, "utf-8");
+  } catch {
+    // Best effort only; logging failure should never affect business logic.
+  }
+
+  const stats = readDbEventStatsFile();
+  if (!stats.since) stats.since = timestamp;
+  stats.total += 1;
+  stats.byType[type] = (stats.byType[type] || 0) + 1;
+  if (event.code) {
+    stats.byCode[event.code] = (stats.byCode[event.code] || 0) + 1;
+  }
+  stats.lastEvent = event;
+  persistDbEventStats(stats);
+
+  const message = `[DB_EVENT] ${type}${event.code ? ` (${event.code})` : ""}`;
+  if (level === "error") {
+    console.error(message, details.message || "");
+  } else {
+    console.warn(message, details.message || "");
+  }
+}
+
+function getRecentDbEvents(limit = 100) {
+  if (!DB_EVENT_LOG_FILE || !fs.existsSync(DB_EVENT_LOG_FILE)) {
+    return [];
+  }
+
+  try {
+    const content = fs.readFileSync(DB_EVENT_LOG_FILE, "utf-8");
+    const lines = content.trim().split("\n").filter(Boolean);
+    return lines
+      .slice(-limit)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+export async function getDbHealthReport(limit = 100) {
+  const numericLimit = Number(limit);
+  const safeLimit = Number.isFinite(numericLimit) ? Math.max(1, Math.min(500, numericLimit)) : 100;
+  return {
+    stats: readDbEventStatsFile(),
+    events: getRecentDbEvents(safeLimit),
+  };
 }
 
 // Share singleton and write queue across route bundles in the same process.
@@ -230,6 +344,7 @@ function clearStaleDbLockIfNeeded() {
     const stat = fs.statSync(DB_LOCK_FILE);
     if (Date.now() - stat.mtimeMs > DB_LOCK_STALE_MS) {
       fs.unlinkSync(DB_LOCK_FILE);
+      recordDbEvent("DB_STALE_LOCK_REMOVED", { ageMs: Math.round(Date.now() - stat.mtimeMs) });
       return true;
     }
   } catch (error) {
@@ -250,6 +365,10 @@ async function waitForDbLockToClear(maxWaitMs = DB_LOCK_READ_WAIT_MS) {
       return;
     }
     if (Date.now() >= deadline) {
+      recordDbEvent("DB_LOCK_WAIT_TIMEOUT", {
+        maxWaitMs,
+        message: "Read proceeded while lock file still exists",
+      });
       return;
     }
     await sleep(15 + Math.floor(Math.random() * 15));
@@ -271,7 +390,14 @@ async function acquireDbFileLock() {
       }
       clearStaleDbLockIfNeeded();
       if (Date.now() >= deadline) {
-        throw new Error(`[DB] Timed out acquiring lock file: ${DB_LOCK_FILE}`);
+        const timeoutError = new Error(`[DB] Timed out acquiring lock file: ${DB_LOCK_FILE}`);
+        timeoutError.code = "DB_LOCK_TIMEOUT";
+        recordDbEvent(
+          "DB_LOCK_ACQUIRE_TIMEOUT",
+          { code: timeoutError.code, timeoutMs: DB_LOCK_TIMEOUT_MS, message: timeoutError.message },
+          "error"
+        );
+        throw timeoutError;
       }
       await sleep(20 + Math.floor(Math.random() * 20));
     }
@@ -342,8 +468,24 @@ async function writeDbWithRetry(db) {
       return;
     } catch (error) {
       if (!isTransientDbWriteError(error) || attempt === MAX_DB_WRITE_RETRIES) {
+        recordDbEvent(
+          "DB_WRITE_FAILED",
+          {
+            code: error?.code || "UNKNOWN",
+            attempt,
+            maxRetries: MAX_DB_WRITE_RETRIES,
+            message: error?.message || "Unknown db write error",
+          },
+          "error"
+        );
         throw error;
       }
+      recordDbEvent("DB_WRITE_RETRY", {
+        code: error?.code || "UNKNOWN",
+        attempt,
+        maxRetries: MAX_DB_WRITE_RETRIES,
+        message: error?.message || "Transient db write error",
+      });
       const backoffMs = Math.min(25 * (2 ** (attempt - 1)), 400);
       const jitterMs = Math.floor(Math.random() * 20);
       await sleep(backoffMs + jitterMs);
@@ -393,6 +535,14 @@ export async function getDb() {
         dbInstance.data = data;
       } else {
         const corruptBackup = backupCorruptDbFile();
+        recordDbEvent(
+          "DB_CORRUPT_RESET_DEFAULT",
+          {
+            backupFile: corruptBackup ? path.basename(corruptBackup) : "",
+            message: "Corrupt db.json detected and no fallback file was recoverable",
+          },
+          "error"
+        );
         console.warn(
           `[DB] Corrupt JSON detected. Backed up corrupt file${corruptBackup ? ` to ${corruptBackup}` : ""}, then reset to defaults.`
         );
