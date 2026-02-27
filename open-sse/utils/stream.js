@@ -55,6 +55,7 @@ export function createSSEStream(options = {}) {
   let accumulatedContent = "";
   let accumulatedThinking = "";
   let ttftAt = null;
+  let pendingEventType = null;
 
   return new TransformStream({
     transform(chunk, controller) {
@@ -156,9 +157,17 @@ export function createSSEStream(options = {}) {
 
         // Translate mode
         if (!trimmed) continue;
+        if (trimmed.startsWith("event:")) {
+          pendingEventType = trimmed.slice(6).trim();
+          continue;
+        }
 
         const parsed = parseSSELine(trimmed);
         if (!parsed) continue;
+        if (!parsed.done && pendingEventType && !parsed.type && !parsed.event) {
+          parsed.event = pendingEventType;
+        }
+        pendingEventType = null;
 
         if (parsed && parsed.done) {
           const output = "data: [DONE]\n\n";
@@ -292,6 +301,10 @@ export function createSSEStream(options = {}) {
         if (buffer.trim()) {
           const parsed = parseSSELine(buffer.trim());
           if (parsed && !parsed.done) {
+            if (pendingEventType && !parsed.type && !parsed.event) {
+              parsed.event = pendingEventType;
+            }
+            pendingEventType = null;
             const translated = translateResponse(targetFormat, sourceFormat, parsed, state);
 
             if (translated?._openaiIntermediate) {
