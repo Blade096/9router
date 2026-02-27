@@ -954,8 +954,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   let transformStream;
   const isDroidCLI = userAgent?.toLowerCase().includes('droid') || userAgent?.toLowerCase().includes('codex-cli');
+  const isResponsesClient = sourceFormat === FORMATS.OPENAI_RESPONSES;
   const needsCodexTranslation = provider === 'codex'
     && targetFormat === 'openai-responses'
+    && !isResponsesClient
     && !isDroidCLI;
 
   if (needsCodexTranslation) {

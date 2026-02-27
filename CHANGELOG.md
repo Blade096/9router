@@ -1,3 +1,15 @@
+# v0.2.67 (2026-02-27)
+
+## Features
+- Added Codex API-key custom endpoint routing support in executor (`providerSpecificData.baseUrl`, supports `.../v1` and `.../responses`).
+- Added Codex API-key validation path in provider test endpoint (`/api/providers/[id]/test`).
+- Improved Codex Responses-to-OpenAI streaming translation to surface reasoning deltas as `delta.reasoning_content` for CLI visibility.
+
+## Fixes
+- Fixed Codex tool-call streaming completion semantics: final OpenAI chunk now emits `finish_reason: "tool_calls"` when tool calls are present (falls back to `stop` otherwise).
+- Hardened Responses SSE parsing in stream translator by propagating preceding `event:` labels into parsed chunks when `data` payload lacks `type`, improving Codex compatibility.
+- Avoided unnecessary Codex translation path for Responses-native clients by guarding with `sourceFormat === openai-responses`.
+
 # v0.2.66 (2026-02-06)
 
 ## Features

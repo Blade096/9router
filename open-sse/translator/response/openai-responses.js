@@ -364,6 +364,7 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
     // Flush: send final chunk with finish_reason
     if (!state.finishReasonSent && state.started) {
       state.finishReasonSent = true;
+      const finalFinishReason = state.hasToolCalls ? "tool_calls" : "stop";
       return {
         id: state.chatId || `chatcmpl-${Date.now()}`,
         object: "chat.completion.chunk",
@@ -372,7 +373,7 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
         choices: [{
           index: 0,
           delta: {},
-          finish_reason: "stop"
+          finish_reason: finalFinishReason
         }]
       };
     }
@@ -390,6 +391,7 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
     state.created = Math.floor(Date.now() / 1000);
     state.toolCallIndex = 0;
     state.currentToolCallId = null;
+    state.hasToolCalls = false;
   }
 
   // Text content delta
@@ -419,6 +421,7 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
   if (eventType === "response.output_item.added" && (data.item?.type === "function_call" || data.item?.type === "custom_tool_call")) {
     const item = data.item;
     state.currentToolCallId = item.call_id || `call_${Date.now()}`;
+    state.hasToolCalls = true;
 
     return {
       id: state.chatId,
@@ -505,7 +508,7 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
     
     if (!state.finishReasonSent) {
       state.finishReasonSent = true;
-      state.finishReason = "stop"; // Mark for usage injection in stream.js
+      state.finishReason = state.hasToolCalls ? "tool_calls" : "stop"; // Mark for usage injection in stream.js
       
       const finalChunk = {
         id: state.chatId,
@@ -515,7 +518,7 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
         choices: [{
           index: 0,
           delta: {},
-          finish_reason: "stop"
+          finish_reason: state.finishReason
         }]
       };
       
@@ -557,8 +560,20 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
 
   // Reasoning events (convert to content or skip)
   if (eventType === "response.reasoning_summary_text.delta") {
-    // Optionally include reasoning as content, or skip
-    return null;
+    const reasoningDelta = data.delta || "";
+    if (!reasoningDelta) return null;
+
+    return {
+      id: state.chatId,
+      object: "chat.completion.chunk",
+      created: state.created,
+      model: state.model || "unknown",
+      choices: [{
+        index: 0,
+        delta: { reasoning_content: reasoningDelta },
+        finish_reason: null
+      }]
+    };
   }
 
   // Ignore other events
@@ -568,4 +583,3 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
 // Register both directions
 register(FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, null, openaiToOpenAIResponsesResponse);
 register(FORMATS.OPENAI_RESPONSES, FORMATS.OPENAI, null, openaiResponsesToOpenAIResponse);
-

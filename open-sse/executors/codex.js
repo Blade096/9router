@@ -13,6 +13,18 @@ export class CodexExecutor extends BaseExecutor {
   }
 
   /**
+   * Support custom Codex-compatible base URL for API-key connections.
+   * Accepts either ".../v1" or full ".../responses" endpoint.
+   */
+  buildUrl(model, stream, urlIndex = 0, credentials = null) {
+    const configuredBaseUrl = credentials?.providerSpecificData?.baseUrl;
+    if (!configuredBaseUrl) return this.config.baseUrl;
+
+    const normalized = configuredBaseUrl.trim().replace(/\/$/, "");
+    return normalized.endsWith("/responses") ? normalized : `${normalized}/responses`;
+  }
+
+  /**
    * Override headers to add session_id per request
    */
   buildHeaders(credentials, stream = true) {
