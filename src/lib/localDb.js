@@ -1,5 +1,4 @@
 import { Low } from "lowdb";
-import { JSONFile } from "lowdb/node";
 import { v4 as uuidv4 } from "uuid";
 import path from "node:path";
 import os from "node:os";
@@ -35,6 +34,7 @@ const DATA_DIR = getUserDataDir();
 const DB_FILE = isCloud ? null : path.join(DATA_DIR, "db.json");
 const DB_TMP_FILE = isCloud ? null : path.join(DATA_DIR, ".db.json.tmp");
 const DB_BACKUP_FILE = isCloud ? null : path.join(DATA_DIR, "db.json.bak");
+const DB_LOCK_FILE = isCloud ? null : path.join(DATA_DIR, "db.json.lock");
 
 // Ensure data directory exists
 if (!isCloud && !fs.existsSync(DATA_DIR)) {
@@ -186,6 +186,9 @@ const LOCAL_DB_INSTANCE_KEY = "__nineRouterLocalDbInstance";
 const LOCAL_DB_WRITE_QUEUE_KEY = "__nineRouterLocalDbWriteQueue";
 const TRANSIENT_DB_WRITE_ERRORS = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
 const MAX_DB_WRITE_RETRIES = 6;
+const DB_LOCK_STALE_MS = 30 * 1000;
+const DB_LOCK_TIMEOUT_MS = 15 * 1000;
+const DB_LOCK_READ_WAIT_MS = 2 * 1000;
 
 function getSharedDbInstance() {
   return globalThis[LOCAL_DB_INSTANCE_KEY] || null;
@@ -216,11 +219,126 @@ function isTransientDbWriteError(error) {
   return TRANSIENT_DB_WRITE_ERRORS.has(error.code);
 }
 
+function isTransientDbLockError(error) {
+  if (!error || typeof error !== "object") return false;
+  return error.code === "EEXIST" || isTransientDbWriteError(error);
+}
+
+function clearStaleDbLockIfNeeded() {
+  if (!DB_LOCK_FILE || !fs.existsSync(DB_LOCK_FILE)) return false;
+  try {
+    const stat = fs.statSync(DB_LOCK_FILE);
+    if (Date.now() - stat.mtimeMs > DB_LOCK_STALE_MS) {
+      fs.unlinkSync(DB_LOCK_FILE);
+      return true;
+    }
+  } catch (error) {
+    if (error && error.code !== "ENOENT") {
+      console.warn("[DB] Failed to inspect/remove stale lock file:", error.message);
+    }
+  }
+  return false;
+}
+
+async function waitForDbLockToClear(maxWaitMs = DB_LOCK_READ_WAIT_MS) {
+  if (!DB_LOCK_FILE) return;
+  const deadline = Date.now() + maxWaitMs;
+
+  while (fs.existsSync(DB_LOCK_FILE)) {
+    clearStaleDbLockIfNeeded();
+    if (!fs.existsSync(DB_LOCK_FILE)) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      return;
+    }
+    await sleep(15 + Math.floor(Math.random() * 15));
+  }
+}
+
+async function acquireDbFileLock() {
+  if (!DB_LOCK_FILE) return null;
+  const deadline = Date.now() + DB_LOCK_TIMEOUT_MS;
+
+  while (true) {
+    try {
+      const fd = fs.openSync(DB_LOCK_FILE, "wx");
+      fs.writeFileSync(fd, `${process.pid} ${Date.now()}\n`);
+      return fd;
+    } catch (error) {
+      if (!isTransientDbLockError(error)) {
+        throw error;
+      }
+      clearStaleDbLockIfNeeded();
+      if (Date.now() >= deadline) {
+        throw new Error(`[DB] Timed out acquiring lock file: ${DB_LOCK_FILE}`);
+      }
+      await sleep(20 + Math.floor(Math.random() * 20));
+    }
+  }
+}
+
+function releaseDbFileLock(lockFd) {
+  if (lockFd !== null && lockFd !== undefined) {
+    try {
+      fs.closeSync(lockFd);
+    } catch {
+      // Ignore close errors; lock cleanup below is what matters.
+    }
+  }
+
+  if (DB_LOCK_FILE) {
+    try {
+      fs.unlinkSync(DB_LOCK_FILE);
+    } catch (error) {
+      if (error && error.code !== "ENOENT") {
+        console.warn("[DB] Failed to remove lock file:", error.message);
+      }
+    }
+  }
+}
+
+function readPrimaryDbFile() {
+  if (!DB_FILE || !fs.existsSync(DB_FILE)) return null;
+
+  const raw = fs.readFileSync(DB_FILE, "utf-8");
+  if (!raw || !raw.trim()) return null;
+
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new SyntaxError("[DB] db.json root must be an object");
+  }
+  return parsed;
+}
+
+async function writeDbFileWithLock(data) {
+  let lockFd = null;
+  try {
+    lockFd = await acquireDbFileLock();
+    const payload = JSON.stringify(data ?? cloneDefaultData(), null, 2);
+    fs.writeFileSync(DB_FILE, `${payload}\n`, "utf-8");
+    backupCurrentDbSnapshot();
+  } finally {
+    releaseDbFileLock(lockFd);
+  }
+}
+
+function createLocalDbAdapter() {
+  return {
+    async read() {
+      await waitForDbLockToClear();
+      return readPrimaryDbFile();
+    },
+    async write(data) {
+      await writeDbFileWithLock(data);
+    },
+  };
+}
+
 async function writeDbWithRetry(db) {
   for (let attempt = 1; attempt <= MAX_DB_WRITE_RETRIES; attempt++) {
     try {
       await db.write();
-      backupCurrentDbSnapshot();
       return;
     } catch (error) {
       if (!isTransientDbWriteError(error) || attempt === MAX_DB_WRITE_RETRIES) {
@@ -260,7 +378,7 @@ export async function getDb() {
   }
 
   if (!dbInstance) {
-    const adapter = new JSONFile(DB_FILE);
+    const adapter = createLocalDbAdapter();
     dbInstance = setSharedDbInstance(new Low(adapter, cloneDefaultData()));
   }
 
