@@ -7,6 +7,10 @@ import {
   KIRO_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 
+function isCodexProvider(provider) {
+  return provider === "codex" || (typeof provider === "string" && provider.startsWith("codex-"));
+}
+
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
   claude: { checkExpiry: true },
@@ -205,21 +209,22 @@ async function testApiKeyConnection(connection) {
   }
 
   try {
+    if (isCodexProvider(connection.provider)) {
+      let baseUrl = connection.providerSpecificData?.baseUrl || "https://api.openai.com/v1";
+      baseUrl = baseUrl.replace(/\/$/, "");
+      if (baseUrl.endsWith("/responses")) {
+        baseUrl = baseUrl.slice(0, -10);
+      }
+      const res = await fetch(`${baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${connection.apiKey}` }
+      });
+      return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
+    }
+
     switch (connection.provider) {
       case "openai": {
         const res = await fetch("https://api.openai.com/v1/models", { headers: { Authorization: `Bearer ${connection.apiKey}` } });
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
-      }
-      case "codex": {
-        let baseUrl = connection.providerSpecificData?.baseUrl || "https://api.openai.com/v1";
-        baseUrl = baseUrl.replace(/\/$/, "");
-        if (baseUrl.endsWith("/responses")) {
-          baseUrl = baseUrl.slice(0, -10);
-        }
-        const res = await fetch(`${baseUrl}/models`, {
-          headers: { Authorization: `Bearer ${connection.apiKey}` }
-        });
-        return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
       }
       case "anthropic": {
         const res = await fetch("https://api.anthropic.com/v1/messages", {

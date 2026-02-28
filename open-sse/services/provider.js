@@ -18,6 +18,10 @@ function isAnthropicCompatible(provider) {
   return typeof provider === "string" && provider.startsWith(ANTHROPIC_COMPATIBLE_PREFIX);
 }
 
+function isCodexProvider(provider) {
+  return provider === "codex" || (typeof provider === "string" && provider.startsWith("codex-"));
+}
+
 function getOpenAICompatibleType(provider) {
   if (!isOpenAICompatible(provider)) return "chat";
   return provider.includes("responses") ? "responses" : "chat";
@@ -116,6 +120,9 @@ export function detectFormat(body) {
 
 // Get provider config
 export function getProviderConfig(provider) {
+  if (isCodexProvider(provider)) {
+    return { ...PROVIDERS.codex };
+  }
   if (isOpenAICompatible(provider)) {
     const apiType = getOpenAICompatibleType(provider);
     return {
@@ -153,6 +160,10 @@ export function buildProviderUrl(provider, model, stream = true, options = {}) {
   }
   const config = getProviderConfig(provider);
 
+  if (isCodexProvider(provider)) {
+    return config.baseUrl;
+  }
+
   switch (provider) {
     case "claude":
       return `${config.baseUrl}?beta=true`;
@@ -175,9 +186,6 @@ export function buildProviderUrl(provider, model, stream = true, options = {}) {
       return `${baseUrl}${path}`;
     }
 
-    case "codex":
-      return config.baseUrl;
-
     case "github":
       return config.baseUrl;
 
@@ -199,6 +207,14 @@ export function buildProviderHeaders(provider, credentials, stream = true, body 
     "Content-Type": "application/json",
     ...config.headers
   };
+
+  if (isCodexProvider(provider)) {
+    headers["Authorization"] = `Bearer ${credentials.apiKey || credentials.accessToken}`;
+    if (stream) {
+      headers["Accept"] = "text/event-stream";
+    }
+    return headers;
+  }
 
   // Add auth header
   // Specific override for Anthropic Compatible

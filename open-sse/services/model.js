@@ -2,6 +2,7 @@
 const ALIAS_TO_PROVIDER_ID = {
   cc: "claude",
   cx: "codex",
+  cx8: "codex-su8",
   gc: "gemini-cli",
   qw: "qwen",
   if: "iflow",

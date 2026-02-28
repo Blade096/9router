@@ -7,6 +7,10 @@ import { refreshGoogleToken, updateProviderCredentials } from "@/sse/services/to
 
 const GEMINI_CLI_MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 
+function isCodexProvider(provider) {
+  return provider === "codex" || (typeof provider === "string" && provider.startsWith("codex-"));
+}
+
 const parseOpenAIStyleModels = (data) => {
   if (Array.isArray(data)) return data;
   return data?.data || data?.models || data?.results || [];
@@ -217,6 +221,45 @@ export async function GET(request, { params }) {
 
       const data = await response.json();
       const models = data.data || data.models || [];
+
+      return NextResponse.json({
+        provider: connection.provider,
+        connectionId: connection.id,
+        models
+      });
+    }
+
+    if (isCodexProvider(connection.provider)) {
+      let baseUrl = connection.providerSpecificData?.baseUrl || "https://api.openai.com/v1";
+      baseUrl = baseUrl.replace(/\/$/, "");
+      if (baseUrl.endsWith("/responses")) {
+        baseUrl = baseUrl.slice(0, -10);
+      }
+
+      const token = connection.providerSpecificData?.copilotToken || connection.accessToken || connection.apiKey;
+      if (!token) {
+        return NextResponse.json({ error: "No valid token found" }, { status: 401 });
+      }
+
+      const response = await fetch(`${baseUrl}/models`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+        return NextResponse.json(
+          { error: `Failed to fetch models: ${response.status}` },
+          { status: response.status }
+        );
+      }
+
+      const data = await response.json();
+      const models = parseOpenAIStyleModels(data);
 
       return NextResponse.json({
         provider: connection.provider,

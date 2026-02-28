@@ -14,6 +14,10 @@ import { saveRequestUsage, trackPendingRequest, appendRequestLog, saveRequestDet
 import { getExecutor } from "../executors/index.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
+function isCodexProvider(provider) {
+  return provider === "codex" || (typeof provider === "string" && provider.startsWith("codex-"));
+}
+
 /**
  * Translate non-streaming response to OpenAI format
  * Handles different provider response formats (Gemini, Claude, etc.)
@@ -368,7 +372,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Track if client actually wants streaming (before we force it for providers)
   const clientRequestedStreaming = body.stream === true || sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI;
-  const providerRequiresStreaming = provider === 'openai' || provider === 'codex';
+  const providerRequiresStreaming = provider === "openai" || isCodexProvider(provider);
 
   // Force streaming for OpenAI/Codex models (they don't support non-streaming mode properly)
   const stream = providerRequiresStreaming ? true : (body.stream !== false);
@@ -578,10 +582,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
     // Treat as SSE if content-type says so OR if it's empty/missing
     // (Codex API doesn't always set Content-Type on streaming responses)
-    const isSSEResponse = contentType.includes("text/event-stream") || (contentType === "" && provider === "codex");
+    const isSSEResponse = contentType.includes("text/event-stream") || (contentType === "" && isCodexProvider(provider));
     if (isSSEResponse) {
       // Codex always returns Responses API SSE format regardless of client source format
-      const isCodexResponsesApi = provider === "codex" || sourceFormat === "openai-responses";
+      const isCodexResponsesApi = isCodexProvider(provider) || sourceFormat === "openai-responses";
 
       if (isCodexResponsesApi) {
         // Responses API SSE → parse → translate to client format
@@ -955,8 +959,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   let transformStream;
   const isDroidCLI = userAgent?.toLowerCase().includes('droid') || userAgent?.toLowerCase().includes('codex-cli');
   const isResponsesClient = sourceFormat === FORMATS.OPENAI_RESPONSES;
-  const needsCodexTranslation = provider === 'codex'
-    && targetFormat === 'openai-responses'
+  const needsCodexTranslation = isCodexProvider(provider)
+    && targetFormat === "openai-responses"
     && !isResponsesClient
     && !isDroidCLI;
 

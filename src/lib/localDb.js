@@ -864,6 +864,7 @@ export async function getPricingForModel(provider, model) {
   const PROVIDER_ID_TO_ALIAS = {
     claude: "cc",
     codex: "cx",
+    "codex-su8": "cx",
     "gemini-cli": "gc",
     qwen: "qw",
     iflow: "if",

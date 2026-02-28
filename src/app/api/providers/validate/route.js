@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getProviderNodeById } from "@/models";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 
+function isCodexProvider(provider) {
+  return provider === "codex" || (typeof provider === "string" && provider.startsWith("codex-"));
+}
+
 // POST /api/providers/validate - Validate API key with provider
 export async function POST(request) {
   try {
@@ -54,6 +58,19 @@ export async function POST(request) {
           },
         });
 
+        isValid = res.ok;
+        return NextResponse.json({
+          valid: isValid,
+          error: isValid ? null : "Invalid API key",
+        });
+      }
+
+      if (isCodexProvider(provider)) {
+        const baseUrl = "https://api.openai.com/v1";
+        const modelsUrl = `${baseUrl}/models`;
+        const res = await fetch(modelsUrl, {
+          headers: { "Authorization": `Bearer ${apiKey}` },
+        });
         isValid = res.ok;
         return NextResponse.json({
           valid: isValid,

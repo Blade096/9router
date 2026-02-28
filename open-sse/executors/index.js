@@ -21,6 +21,9 @@ const executors = {
 const defaultCache = new Map();
 
 export function getExecutor(provider) {
+  if (typeof provider === "string" && provider.startsWith("codex-")) {
+    return executors.codex;
+  }
   if (executors[provider]) return executors[provider];
   if (!defaultCache.has(provider)) defaultCache.set(provider, new DefaultExecutor(provider));
   return defaultCache.get(provider);
